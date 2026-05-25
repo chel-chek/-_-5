@@ -826,11 +826,39 @@ def callback_handler(call):
         bot.answer_callback_query(call.id, f"✅ {names[reg]}!")
         bot.send_message(call.message.chat.id, f"🌍 {names[reg]} | +{rewards[reg]}👥 | 📅 {end}")
 
+import subprocess
+import os
+
+def save_db_to_github():
+    """Сохраняет базу данных в GitHub"""
+    try:
+        token = os.environ.get('GITHUB_TOKEN')
+        repo = os.environ.get('GITHUB_REPO')
+        if not token or not repo:
+            return
+        
+        subprocess.run(['git', 'config', '--global', 'user.email', 'bot@render.com'], capture_output=True)
+        subprocess.run(['git', 'config', '--global', 'user.name', 'Render Bot'], capture_output=True)
+        subprocess.run(['git', 'add', 'game.db'], capture_output=True, cwd='/opt/render/project/src')
+        subprocess.run(['git', 'commit', '-m', 'Auto-save database'], capture_output=True, cwd='/opt/render/project/src')
+        subprocess.run(['git', 'push', f'https://{token}@github.com/{repo}.git', 'HEAD:main'], capture_output=True, cwd='/opt/render/project/src')
+    except:
+        pass
+
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
+    
+    def auto_save():
+        while True:
+            time.sleep(300)
+            save_db_to_github()
+    
+    threading.Thread(target=auto_save, daemon=True).start()
+    
     while True:
         try:
             bot.polling(none_stop=True)
         except Exception as e:
             print(f"Ошибка: {e}")
+            save_db_to_github()
             time.sleep(5)
