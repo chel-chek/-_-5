@@ -6,7 +6,7 @@ import random
 import time
 import threading
 
-TOKEN = '8786607133:AAHmhOrkAQpbxVy4NW1iTcP1jKjsuBIWTHs'
+TOKEN = '8786607133:AAGRlo79hTxWroCN-1vppbH9i0nCQrGS6OI'
 
 bot = telebot.TeleBot(TOKEN)
 
