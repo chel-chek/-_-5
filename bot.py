@@ -55,8 +55,6 @@ RESOURCES = {
 }
 
 MAX_CITIES = 15
-
-# Состояния создания страны
 creating_country = {}
 
 def init_db():
@@ -77,10 +75,8 @@ def init_db():
                   last_collection TEXT, game_year REAL DEFAULT 1904)''')
     
     for col_name, col_type in [
-        ('created_date', 'TEXT'),
-        ('is_banned', 'INTEGER DEFAULT 0'),
-        ('is_muted', 'INTEGER DEFAULT 0'),
-        ('warns', 'INTEGER DEFAULT 0'),
+        ('created_date', 'TEXT'),('is_banned', 'INTEGER DEFAULT 0'),
+        ('is_muted', 'INTEGER DEFAULT 0'),('warns', 'INTEGER DEFAULT 0'),
         ('last_login', 'TEXT')
     ]:
         try: c.execute(f"ALTER TABLE players ADD COLUMN {col_name} {col_type}")
@@ -275,10 +271,9 @@ def handle_all(message):
         uid = message.from_user.id
         text = message.text.strip()
         
-        # Обработка создания страны
+        # Создание страны
         if uid in creating_country:
             state = creating_country[uid]
-            
             if state['step'] == 'capital':
                 c = db_conn.cursor()
                 c.execute("INSERT INTO cities (user_id, city_name, is_capital) VALUES (?,?,1)", (uid, text))
@@ -286,7 +281,6 @@ def handle_all(message):
                 state['step'] = 'cities'
                 bot.send_message(message.chat.id, f"✅ Столица: {text}\n\nВведите 4 города через запятую:")
                 return
-            
             elif state['step'] == 'cities':
                 cities = [c.strip() for c in text.split(',')]
                 if len(cities) != 4:
@@ -297,7 +291,6 @@ def handle_all(message):
                 db_conn.commit()
                 state['step'] = 'country'
                 bot.send_message(message.chat.id, "Введите название страны:"); return
-            
             elif state['step'] == 'country':
                 c = db_conn.cursor()
                 c.execute("UPDATE players SET country_name=? WHERE user_id=?", (text, uid))
@@ -307,20 +300,17 @@ def handle_all(message):
                 bot.send_message(message.chat.id, "🎉 СТРАНА СОЗДАНА!\n\nпомощь — команды\nсобрать — доход\nстроить — здания")
                 return
         
-        # Обычные команды
         p = get_player(uid)
-        
         if not p or not has_country(uid):
             if text == '/start': return
-            bot.reply_to(message, "❌ У вас нет страны! Создайте: /start")
-            return
+            return  # Молча игнорируем
         
         banned = p[20] if len(p) > 20 else 0
         muted = p[21] if len(p) > 21 else 0
-        
         if banned == 1: return
         if muted == 1: bot.reply_to(message, "🔇 Вы в муте!"); return
 
+        # Команды
         if text in ['анкета']: bot.reply_to(message, show_anketa(uid))
         elif text in ['собрать', 'собрать доход']: cmd_collect(message)
         elif text in ['строить', 'стройка']: cmd_build_menu(message)
@@ -357,7 +347,6 @@ def handle_all(message):
         print(f"Ошибка: {e}")
 
 # ==================== ВСЕ КОМАНДЫ ====================
-
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
@@ -395,10 +384,6 @@ def cmd_collect(message):
     bot.reply_to(message, text)
 
 def cmd_build_menu(message):
-    c = db_conn.cursor()
-    c.execute("SELECT city_name FROM cities WHERE user_id=? AND is_destroyed=0", (message.from_user.id,))
-    cities = c.fetchall()
-    if not cities: bot.reply_to(message, "❌ Нет доступных городов!"); return
     mk = types.InlineKeyboardMarkup(row_width=2)
     mk.add(types.InlineKeyboardButton("🏢 Бизнес-центр 65💰", callback_data="b_business_center"),
            types.InlineKeyboardButton("🪓 Лесопилка 55💰", callback_data="b_lumberjack"),
@@ -410,7 +395,7 @@ def cmd_build_menu(message):
            types.InlineKeyboardButton("🛢 Нефть 70💰", callback_data="b_oil_rig"),
            types.InlineKeyboardButton("⛏ Железо 65💰", callback_data="b_iron_mine"),
            types.InlineKeyboardButton("🪨 Уголь 70💰", callback_data="b_coal_mine"))
-    bot.reply_to(message, f"🏗 Выберите здание:", reply_markup=mk)
+    bot.reply_to(message, "🏗 Выберите здание:", reply_markup=mk)
 
 def cmd_search_menu(message):
     mk = types.InlineKeyboardMarkup(row_width=2)
@@ -470,7 +455,8 @@ def cmd_help(message):
 !рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня
 дот КЛАСС Город, бункер КЛАСС Город, каземат КЛАСС Город
 город новый НАЗВАНИЕ, чинить НАЗВАНИЕ, столица НАЗВАНИЕ
-поделиться НАЗВАНИЕ @игрок, разведка @игрок, топ, мойid""")
+поделиться НАЗВАНИЕ @игрок, разведка @игрок, топ, мойid
+дать @игрок РЕСУРС КОЛИЧЕСТВО (админ)""")
 
 def cmd_craft(message):
     uid = message.from_user.id
@@ -528,7 +514,6 @@ def cmd_recipe(message):
     except: bot.reply_to(message, "рецепт НАЗВАНИЕ")
 
 def cmd_create_recipe(message):
-    uid = message.from_user.id
     try:
         text = message.text.replace('!рецепт ','')
         parts = [p.strip() for p in text.split('|')]
@@ -536,7 +521,6 @@ def cmd_create_recipe(message):
         wheels = parts[5].lower()=='да' if len(parts)>5 else False
         super_heavy = parts[6].lower()=='да' if len(parts)>6 else False
         coal_pow = parts[7].lower()=='да' if len(parts)>7 else False
-        armor = float(parts[8]) if len(parts)>8 else 0
         iron = weight * 2
         if gp_grams >= 500: gp = gp_grams / 500
         elif gp_grams >= 100: gp = gp_grams / 100
@@ -544,7 +528,6 @@ def cmd_create_recipe(message):
         fuel = 0 if coal_pow else power / 50
         coal = power / 50 if coal_pow else 0
         rubber = 1 if wheels else 0
-        special = armor / 1000
         if super_heavy:
             if weight > 35000: d = 35
             elif weight > 20000: d = 25
@@ -560,7 +543,7 @@ def cmd_create_recipe(message):
         elif gp_grams > 25000: gp /= 2
         c = db_conn.cursor()
         c.execute("INSERT OR REPLACE INTO vehicle_recipes VALUES (?,?,?,?,?,?,?,?)",
-                  (name,iron,fuel,gp,rubber,0,coal,special))
+                  (name,iron,fuel,gp,rubber,0,coal,0))
         db_conn.commit()
         text = f"✅ Рецепт {name}:\n🔩 {iron:.1f}\n⛽ {fuel:.1f}\n💥 {gp:.1f}"
         bot.reply_to(message, text)
@@ -571,7 +554,8 @@ def cmd_fort(message):
         parts = message.text.split()
         ftype = parts[0]; armor = parts[1].upper(); city = ' '.join(parts[2:])
         costs = {'A':(85,30),'B':(65,25),'C':(45,20),'D':(25,15)}
-        if armor not in costs: bot.reply_to(message, "❌ Классы: A,B,C,D"); return        cem, wood = costs[armor]
+        if armor not in costs: bot.reply_to(message, "❌ Классы: A,B,C,D"); return
+        cem, wood = costs[armor]
         p = get_player(message.from_user.id)
         if p[11] < cem: bot.reply_to(message, f"❌ Нужно {cem}🏗"); return
         if p[14] < wood: bot.reply_to(message, f"❌ Нужно {wood}🪵"); return
@@ -779,17 +763,20 @@ def cmd_admin_list(message):
 def callback_handler(call):
     uid = call.from_user.id
     p = get_player(uid)
-    if not p: return
-    if not has_country(uid):
-        bot.answer_callback_query(call.id, "❌ У вас нет страны! /start")
+    
+    # Проверка: только тот кто вызвал меню может нажимать кнопки
+    if not p or not has_country(uid):
+        bot.answer_callback_query(call.id, "❌ Ай-яй-яй, у вас нет страны!")
         return
+    
     data = call.data
     
     if data.startswith('b_'):
         bt = data[2:]
         if bt in BUILDING_COSTS:
             cost = BUILDING_COSTS[bt]
-            if p[5] < cost: bot.answer_callback_query(call.id, f"❌ {cost}💰"); return
+            if p[5] < cost:
+                bot.answer_callback_query(call.id, f"❌ Нужно {cost}💰"); return
             if bt in BUILDING_DEPOSIT and not has_deposit(uid, BUILDING_DEPOSIT[bt]):
                 bot.answer_callback_query(call.id, "❌ Сначала найдите месторождение!"); return
             if bt in BUILDING_POP and BUILDING_POP[bt] > 0:
