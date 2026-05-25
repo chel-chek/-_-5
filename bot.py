@@ -7,7 +7,7 @@ import time
 import traceback
 import threading
 
-TOKEN = '8786607133:AAFwAEi3vfw1G7pnW8aDhVyv0dxC5WYiGE4'
+TOKEN = '8786607133:AAHmhOrkAQpbxVy4NW1iTcP1jKjsuBIWTHs'
 
 bot = telebot.TeleBot(TOKEN)
 
