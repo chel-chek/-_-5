@@ -349,15 +349,26 @@ def start(message):
     bot.register_next_step_handler(msg, step_cap)
 
 def step_cap(message):
-    uid = message.from_user.id
-    c = db_conn.cursor()
-    c.execute("SELECT COUNT(*) FROM cities WHERE user_id=?", (uid,))
-    if c.fetchone()[0] > 0: return  # Уже есть города - игнорируем
-    c.execute("INSERT INTO cities (user_id, city_name, is_capital) VALUES (?,?,1)", (uid, message.text.strip()))
-    db_conn.commit()
-    msg = bot.send_message(message.chat.id, f"✅ Столица: {message.text.strip()}\n\nВведите 4 города через запятую:")
-    bot.register_next_step_handler(msg, step_cities, uid)
-
+    try:
+        uid = message.from_user.id
+        text = message.text.strip()
+        
+        c = db_conn.cursor()
+        c.execute("SELECT COUNT(*) FROM cities WHERE user_id=?", (uid,))
+        if c.fetchone()[0] > 0:
+            return
+        
+        c.execute("INSERT INTO cities (user_id, city_name, is_capital) VALUES (?,?,1)", (uid, text))
+        db_conn.commit()
+        
+        msg = bot.send_message(message.chat.id, f"✅ Столица: {text}\n\nВведите 4 города через запятую:")
+        bot.register_next_step_handler(msg, step_cities, uid)
+    except Exception as e:
+        print(f"Ошибка step_cap: {e}")
+        try:
+            bot.send_message(message.chat.id, "❌ Ошибка. Напишите /start чтобы начать заново.")
+        except:
+            pass
 def step_cities(message, uid=None):
     if uid is None: uid = message.from_user.id
     if message.from_user.id != uid: return  # Чужое сообщение - игнорируем
