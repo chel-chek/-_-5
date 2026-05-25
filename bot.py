@@ -261,7 +261,6 @@ def start(message):
               (uid, uname, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d")))
     db_conn.commit()
     
-    # Начинаем создание страны
     creating_country[uid] = {'step': 'capital'}
     bot.send_message(message.chat.id, "🎮 Добро пожаловать!\n\nВведите название столицы:")
 
@@ -285,21 +284,19 @@ def handle_all(message):
                 c.execute("INSERT INTO cities (user_id, city_name, is_capital) VALUES (?,?,1)", (uid, text))
                 db_conn.commit()
                 state['step'] = 'cities'
-                bot.send_message(message.chat.id, f"✅ Столица: {text}\n\nВведите 4 города через запятую:\nПример: Киев, Одесса, Новгород, Казань")
+                bot.send_message(message.chat.id, f"✅ Столица: {text}\n\nВведите 4 города через запятую:")
                 return
             
             elif state['step'] == 'cities':
                 cities = [c.strip() for c in text.split(',')]
                 if len(cities) != 4:
-                    bot.send_message(message.chat.id, "❌ Нужно ровно 4 города!")
-                    return
+                    bot.send_message(message.chat.id, "❌ Нужно ровно 4 города!"); return
                 c = db_conn.cursor()
                 for city in cities:
                     c.execute("INSERT INTO cities (user_id, city_name) VALUES (?,?)", (uid, city))
                 db_conn.commit()
                 state['step'] = 'country'
-                bot.send_message(message.chat.id, "Введите название страны:")
-                return
+                bot.send_message(message.chat.id, "Введите название страны:"); return
             
             elif state['step'] == 'country':
                 c = db_conn.cursor()
@@ -307,7 +304,7 @@ def handle_all(message):
                 db_conn.commit()
                 del creating_country[uid]
                 show_menu(uid)
-                bot.send_message(message.chat.id, "🎉 СТРАНА СОЗДАНА!\n\nпомощь — команды\nсобрать — доход (со 2-го дня)\nстроить — здания")
+                bot.send_message(message.chat.id, "🎉 СТРАНА СОЗДАНА!\n\nпомощь — команды\nсобрать — доход\nстроить — здания")
                 return
         
         # Обычные команды
@@ -359,7 +356,488 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# --- Остальные функции (cmd_collect, cmd_build_menu, ...) оставь без изменений ---
+# ==================== ВСЕ КОМАНДЫ ====================
+
+def cmd_collect(message):
+    uid = message.from_user.id
+    p = get_player(uid)
+    today = datetime.now().strftime("%Y-%m-%d")
+    last_coll = p[15] if len(p) > 15 else None
+    created = p[18] if len(p) > 18 else None
+    if last_coll == today: bot.reply_to(message, "❌ Доход уже собран сегодня!"); return
+    if created and created == today: bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня."); return
+    c = db_conn.cursor()
+    c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities c ON b.city_id=c.id WHERE b.user_id=? AND c.is_destroyed=0 GROUP BY b.building_type", (uid,))
+    bld = dict(c.fetchall())
+    inc = {}
+    if 'lumberjack' in bld: inc['wood'] = 80 * bld['lumberjack']
+    if 'construction_factory' in bld: inc['cement'] = 100 * bld['construction_factory']
+    if 'university' in bld: inc['science_points'] = 2 * bld['university']
+    if 'business_center' in bld: inc['tenge'] = 25 * bld['business_center']
+    if 'iron_mine' in bld: inc['iron'] = 150 * bld['iron_mine']
+    if 'oil_rig' in bld: inc['fuel'] = 150 * bld['oil_rig']
+    if 'coal_mine' in bld: inc['coal'] = 125 * bld['coal_mine']
+    if 'fabric_factory' in bld: inc['fabric'] = 50 * bld['fabric_factory']
+    if 'stables' in bld: inc['horses'] = 20 * bld['stables']
+    days = 1
+    if last_coll:
+        try:
+            ld = datetime.strptime(last_coll, "%Y-%m-%d")
+            days = max(1, (datetime.now() - ld).days)
+        except: days = 1
+    for res, val in inc.items(): upd_res(uid, res, val*days)
+    c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today,uid))
+    db_conn.commit()
+    nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
+    text = f"📊 Доход за {days} дн.:\n"
+    for res, val in inc.items(): text += f"{nm.get(res,res)} +{val*days}\n"
+    if not inc: text += "Нет работающих зданий.\n"
+    bot.reply_to(message, text)
+
+def cmd_build_menu(message):
+    c = db_conn.cursor()
+    c.execute("SELECT city_name FROM cities WHERE user_id=? AND is_destroyed=0", (message.from_user.id,))
+    cities = c.fetchall()
+    if not cities: bot.reply_to(message, "❌ Нет доступных городов!"); return
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(types.InlineKeyboardButton("🏢 Бизнес-центр 65💰", callback_data="b_business_center"),
+           types.InlineKeyboardButton("🪓 Лесопилка 55💰", callback_data="b_lumberjack"),
+           types.InlineKeyboardButton("🏗 Стройзавод 50💰", callback_data="b_construction_factory"),
+           types.InlineKeyboardButton("🏫 Университет 90💰", callback_data="b_university"),
+           types.InlineKeyboardButton("🧵 Тканевый 50💰", callback_data="b_fabric_factory"),
+           types.InlineKeyboardButton("🐴 Конюшни 60💰", callback_data="b_stables"),
+           types.InlineKeyboardButton("⚔ Казарма 70💰", callback_data="b_barracks"),
+           types.InlineKeyboardButton("🛢 Нефть 70💰", callback_data="b_oil_rig"),
+           types.InlineKeyboardButton("⛏ Железо 65💰", callback_data="b_iron_mine"),
+           types.InlineKeyboardButton("🪨 Уголь 70💰", callback_data="b_coal_mine"))
+    bot.reply_to(message, f"🏗 Выберите здание:", reply_markup=mk)
+
+def cmd_search_menu(message):
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(types.InlineKeyboardButton("🛢 Нефть 20💰", callback_data="s_oil"),
+           types.InlineKeyboardButton("🔩 Железо 20💰", callback_data="s_iron"),
+           types.InlineKeyboardButton("🪨 Уголь 20💰", callback_data="s_coal"),
+           types.InlineKeyboardButton("💛 Сера 15💰", callback_data="s_sulfur"),
+           types.InlineKeyboardButton("☢ Уран 100💰", callback_data="s_uranium"))
+    bot.reply_to(message, "🔍 Что ищем?", reply_markup=mk)
+
+def cmd_warehouse(message):
+    c = db_conn.cursor()
+    c.execute("SELECT vehicle_name, quantity FROM vehicles WHERE user_id=? AND quantity>0 ORDER BY vehicle_name", (message.from_user.id,))
+    items = c.fetchall()
+    if not items: bot.reply_to(message, "📦 Склад пуст"); return
+    text = "📦 СКЛАД:\n"
+    for n,q in items: text += f"• {n}: {q}\n"
+    bot.reply_to(message, text)
+
+def cmd_cities(message):
+    c = db_conn.cursor()
+    c.execute("SELECT city_name, is_capital, is_destroyed FROM cities WHERE user_id=?", (message.from_user.id,))
+    cities = c.fetchall()
+    text = "🏙 ГОРОДА:\n"
+    for nm, cap, des in cities:
+        s = "⭐ " if cap else "• "
+        text += f"{s}{nm}{' ❌' if des else ' ✅'}\n"
+    bot.reply_to(message, text)
+
+def cmd_blueprints(message):
+    c = db_conn.cursor()
+    c.execute("SELECT blueprint_name FROM blueprints WHERE owner_id=?", (message.from_user.id,))
+    own = c.fetchall()
+    c.execute("SELECT blueprint_name FROM blueprint_access WHERE player_id=?", (message.from_user.id,))
+    acc = c.fetchall()
+    text = "📋 ЧЕРТЕЖИ:\n"
+    if own: text += "\n🔒 Мои:\n" + "\n".join([f"• {b[0]}" for b in own])
+    if acc: text += "\n🔓 Доступ:\n" + "\n".join([f"• {b[0]}" for b in acc])
+    if not own and not acc: text += "Нет чертежей"
+    bot.reply_to(message, text)
+
+def cmd_expedition(message):
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(types.InlineKeyboardButton("🌍 Европа +200", callback_data="e_europe"),
+           types.InlineKeyboardButton("🏯 Азия +200", callback_data="e_asia"),
+           types.InlineKeyboardButton("🌴 Африка +225", callback_data="e_africa"),
+           types.InlineKeyboardButton("🌎 Сев.Америка +200", callback_data="e_america_north"),
+           types.InlineKeyboardButton("🌎 Юж.Америка +200", callback_data="e_america_south"),
+           types.InlineKeyboardButton("🦘 Австралия +175", callback_data="e_australia"))
+    bot.reply_to(message, "🌍 Куда? (70💰, 3 дня)", reply_markup=mk)
+
+def cmd_help(message):
+    bot.reply_to(message, """📖 КОМАНДЫ:
+анкета, собрать, строить, поиск, склад, города, чертежи, эксп, помощь
+крафт КОЛИЧЕСТВО НАЗВАНИЕ — построить
+разобрать КОЛИЧЕСТВО НАЗВАНИЕ — разобрать
+!рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня
+дот КЛАСС Город, бункер КЛАСС Город, каземат КЛАСС Город
+город новый НАЗВАНИЕ, чинить НАЗВАНИЕ, столица НАЗВАНИЕ
+поделиться НАЗВАНИЕ @игрок, разведка @игрок, топ, мойid""")
+
+def cmd_craft(message):
+    uid = message.from_user.id
+    try:
+        parts = message.text.replace('крафт ','',1).split(' ',1)
+        qty = int(parts[0]); name = parts[1].upper()
+        c = db_conn.cursor()
+        c.execute("SELECT * FROM vehicle_recipes WHERE vehicle_name=?", (name,))
+        rec = c.fetchone()
+        if not rec: bot.reply_to(message, f"❌ Нет рецепта! !рецепт {name} | ..."); return
+        p = get_player(uid)
+        iron = rec[1]*qty; fuel = rec[2]*qty; gp = rec[3]*qty
+        if p[6] < iron: bot.reply_to(message, f"❌ Нужно {iron:.0f}🔩"); return
+        if p[7] < fuel: bot.reply_to(message, f"❌ Нужно {fuel:.0f}⛽"); return
+        if p[8] < gp: bot.reply_to(message, f"❌ Нужно {gp:.0f}💥"); return
+        upd_res(uid,'iron',-iron); upd_res(uid,'fuel',-fuel); upd_res(uid,'gunpowder',-gp)
+        c.execute("SELECT quantity FROM vehicles WHERE user_id=? AND vehicle_name=?", (uid,name))
+        have = c.fetchone()
+        if have: c.execute("UPDATE vehicles SET quantity=quantity+? WHERE user_id=? AND vehicle_name=?", (qty,uid,name))
+        else: c.execute("INSERT INTO vehicles (user_id, vehicle_name, quantity) VALUES (?,?,?)", (uid,name,qty))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ {qty}x {name}")
+    except: bot.reply_to(message, "❌ крафт КОЛИЧЕСТВО НАЗВАНИЕ")
+
+def cmd_dismantle(message):
+    uid = message.from_user.id
+    try:
+        text = message.text
+        for p in ['разобрать ','разбор ']:
+            if text.startswith(p): text = text.replace(p,'',1); break
+        parts = text.split(' ',1)
+        qty = int(parts[0]); name = parts[1].upper()
+        c = db_conn.cursor()
+        c.execute("SELECT quantity FROM vehicles WHERE user_id=? AND vehicle_name=?", (uid,name))
+        have = c.fetchone()
+        if not have or have[0] < qty: bot.reply_to(message, f"❌ Есть: {have[0] if have else 0}"); return
+        c.execute("SELECT * FROM vehicle_recipes WHERE vehicle_name=?", (name,))
+        rec = c.fetchone()
+        if not rec: bot.reply_to(message, "❌ Рецепт не найден!"); return
+        upd_res(uid,'iron',rec[1]*qty); upd_res(uid,'fuel',rec[2]*qty); upd_res(uid,'gunpowder',rec[3]*qty)
+        c.execute("UPDATE vehicles SET quantity=quantity-? WHERE user_id=? AND vehicle_name=?", (qty,uid,name))
+        db_conn.commit()
+        bot.reply_to(message, f"♻ {qty}x {name}")
+    except: bot.reply_to(message, "❌ разобрать КОЛИЧЕСТВО НАЗВАНИЕ")
+
+def cmd_recipe(message):
+    try:
+        name = message.text.replace('рецепт ','',1).upper()
+        c = db_conn.cursor()
+        c.execute("SELECT * FROM vehicle_recipes WHERE vehicle_name=?", (name,))
+        rec = c.fetchone()
+        if not rec: bot.reply_to(message, "❌ Не найден!"); return
+        text = f"📋 {name}:\n🔩 {rec[1]:.1f}\n⛽ {rec[2]:.1f}\n💥 {rec[3]:.1f}"
+        bot.reply_to(message, text)
+    except: bot.reply_to(message, "рецепт НАЗВАНИЕ")
+
+def cmd_create_recipe(message):
+    uid = message.from_user.id
+    try:
+        text = message.text.replace('!рецепт ','')
+        parts = [p.strip() for p in text.split('|')]
+        name = parts[0].upper(); weight = float(parts[2]); power = float(parts[3]); gp_grams = float(parts[4])
+        wheels = parts[5].lower()=='да' if len(parts)>5 else False
+        super_heavy = parts[6].lower()=='да' if len(parts)>6 else False
+        coal_pow = parts[7].lower()=='да' if len(parts)>7 else False
+        armor = float(parts[8]) if len(parts)>8 else 0
+        iron = weight * 2
+        if gp_grams >= 500: gp = gp_grams / 500
+        elif gp_grams >= 100: gp = gp_grams / 100
+        else: gp = gp_grams / 50
+        fuel = 0 if coal_pow else power / 50
+        coal = power / 50 if coal_pow else 0
+        rubber = 1 if wheels else 0
+        special = armor / 1000
+        if super_heavy:
+            if weight > 35000: d = 35
+            elif weight > 20000: d = 25
+            elif weight > 10000: d = 20
+            elif weight > 5000: d = 10
+            elif weight > 3000: d = 8
+            elif weight > 900: d = 6
+            else: d = 1
+            iron /= d; fuel /= d; coal /= d
+        if gp_grams > 200000: gp /= 8
+        elif gp_grams > 100000: gp /= 5
+        elif gp_grams > 50000: gp /= 3
+        elif gp_grams > 25000: gp /= 2
+        c = db_conn.cursor()
+        c.execute("INSERT OR REPLACE INTO vehicle_recipes VALUES (?,?,?,?,?,?,?,?)",
+                  (name,iron,fuel,gp,rubber,0,coal,special))
+        db_conn.commit()
+        text = f"✅ Рецепт {name}:\n🔩 {iron:.1f}\n⛽ {fuel:.1f}\n💥 {gp:.1f}"
+        bot.reply_to(message, text)
+    except: bot.reply_to(message, "❌ !рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня")
+
+def cmd_fort(message):
+    try:
+        parts = message.text.split()
+        ftype = parts[0]; armor = parts[1].upper(); city = ' '.join(parts[2:])
+        costs = {'A':(85,30),'B':(65,25),'C':(45,20),'D':(25,15)}
+        if armor not in costs: bot.reply_to(message, "❌ Классы: A,B,C,D"); return        cem, wood = costs[armor]
+        p = get_player(message.from_user.id)
+        if p[11] < cem: bot.reply_to(message, f"❌ Нужно {cem}🏗"); return
+        if p[14] < wood: bot.reply_to(message, f"❌ Нужно {wood}🪵"); return
+        upd_res(message.from_user.id,'cement',-cem); upd_res(message.from_user.id,'wood',-wood)
+        names = {'дот':'ДОТ','бункер':'Бункер','каземат':'Каземат'}
+        bot.reply_to(message, f"✅ {names.get(ftype,ftype)} {armor} в {city}!")
+    except: bot.reply_to(message, "дот КЛАСС Город")
+
+def cmd_new_city(message):
+    try:
+        for p in ['город новый ','построить город ']:
+            if message.text.startswith(p): name = message.text.replace(p,'',1); break
+        uid = message.from_user.id
+        c = db_conn.cursor()
+        if c.execute("SELECT COUNT(*) FROM cities WHERE user_id=?", (uid,)).fetchone()[0] >= MAX_CITIES:
+            bot.reply_to(message, f"❌ Максимум {MAX_CITIES} городов!"); return
+        p = get_player(uid)
+        if p[14] < 850: bot.reply_to(message, "❌ 850🪵"); return
+        if p[11] < 1000: bot.reply_to(message, "❌ 1000🏗"); return
+        if p[5] < 350: bot.reply_to(message, "❌ 350💰"); return
+        upd_res(uid,'wood',-850); upd_res(uid,'cement',-1000); upd_res(uid,'tenge',-350)
+        c.execute("INSERT INTO cities (user_id, city_name) VALUES (?,?)", (uid,name))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ Город {name}!")
+    except: bot.reply_to(message, "город новый Название")
+
+def cmd_repair_city(message):
+    try:
+        for p in ['чинить ','город чинить ']:
+            if message.text.startswith(p): name = message.text.replace(p,'',1); break
+        p = get_player(message.from_user.id)
+        if p[14] < 500: bot.reply_to(message, "❌ 500🪵"); return
+        if p[11] < 800: bot.reply_to(message, "❌ 800🏗"); return
+        if p[5] < 350: bot.reply_to(message, "❌ 350💰"); return
+        upd_res(message.from_user.id,'wood',-500); upd_res(message.from_user.id,'cement',-800); upd_res(message.from_user.id,'tenge',-350)
+        c = db_conn.cursor()
+        c.execute("UPDATE cities SET is_destroyed=0 WHERE user_id=? AND city_name=?", (message.from_user.id,name))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ {name} восстановлен!")
+    except: bot.reply_to(message, "чинить Название")
+
+def cmd_move_capital(message):
+    try:
+        name = message.text.replace('столица ','',1)
+        c = db_conn.cursor()
+        c.execute("UPDATE cities SET is_capital=0 WHERE user_id=? AND is_capital=1", (message.from_user.id,))
+        c.execute("UPDATE cities SET is_capital=1 WHERE user_id=? AND city_name=?", (message.from_user.id,name))
+        db_conn.commit()
+        bot.reply_to(message, f"⭐ Столица → {name}")
+    except: bot.reply_to(message, "столица Название")
+
+def cmd_share_bp(message):
+    try:
+        parts = message.text.replace('поделиться ','',1).split()
+        bp = parts[0].upper(); tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("SELECT owner_id FROM blueprints WHERE blueprint_name=?", (bp,))
+        own = c.fetchone()
+        if not own or own[0] != message.from_user.id: bot.reply_to(message, "❌ Не владелец!"); return
+        c.execute("INSERT OR IGNORE INTO blueprint_access VALUES (?,?,?)", (bp,tid,message.from_user.id))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ {bp} → @{parts[1].replace('@','')}")
+    except: bot.reply_to(message, "поделиться НАЗВАНИЕ @игрок")
+
+def cmd_look(message):
+    try:
+        tid = get_uid(message.text.replace('разведка ','',1).replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        bot.reply_to(message, show_anketa(message.from_user.id, tid))
+    except: bot.reply_to(message, "разведка @игрок")
+
+def cmd_top(message):
+    c = db_conn.cursor()
+    c.execute("SELECT username, country_name, tenge FROM players WHERE is_banned=0 ORDER BY tenge DESC LIMIT 10")
+    text = "🏆 ТОП-10:\n"
+    for i,(un,cn,tg) in enumerate(c.fetchall(),1): text += f"{i}. {cn} — {tg:.0f}💰\n"
+    bot.reply_to(message, text)
+
+def cmd_give(message):
+    if not is_admin(message.from_user.id): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.replace('дать ','',1).split()
+        tid = get_uid(parts[0].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        if tid == message.from_user.id: bot.reply_to(message, "❌ Нельзя себе!"); return
+        res = parts[1].lower(); amt = float(parts[2])
+        if res not in RESOURCES: bot.reply_to(message, "❌ Ресурс не найден!"); return
+        upd_res(tid, RESOURCES[res], amt)
+        bot.reply_to(message, f"✅ +{amt} {res}")
+    except: bot.reply_to(message, "дать @игрок тенге 500")
+
+def cmd_take(message):
+    if not is_admin(message.from_user.id): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.replace('забрать ','',1).split()
+        tid = get_uid(parts[0].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        res = parts[1].lower(); amt = float(parts[2])
+        if res not in RESOURCES: bot.reply_to(message, "❌ Ресурс не найден!"); return
+        upd_res(tid, RESOURCES[res], -amt)
+        bot.reply_to(message, f"✅ -{amt} {res}")
+    except: bot.reply_to(message, "забрать @игрок тенге 500")
+
+def cmd_give_all(message):
+    if not is_admin(message.from_user.id, 3): bot.reply_to(message, "❌ Главный админ!"); return
+    try:
+        parts = message.text.replace('всем ','',1).split()
+        res = parts[0].lower(); amt = float(parts[1])
+        if res not in RESOURCES: bot.reply_to(message, "❌ Ресурс не найден!"); return
+        c = db_conn.cursor()
+        c.execute("SELECT user_id FROM players WHERE is_banned=0")
+        for (uid,) in c.fetchall(): upd_res(uid, RESOURCES[res], amt)
+        bot.reply_to(message, f"✅ Всем +{amt} {res}")
+    except: bot.reply_to(message, "всем тенге 1000")
+
+def cmd_ban(message):
+    if not is_admin(message.from_user.id, 2): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("DELETE FROM cities WHERE user_id=?", (tid,))
+        c.execute("DELETE FROM buildings WHERE user_id=?", (tid,))
+        c.execute("DELETE FROM vehicles WHERE user_id=?", (tid,))
+        c.execute("UPDATE players SET is_banned=1 WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"🚫 @{parts[1].replace('@','')} забанен!")
+    except: bot.reply_to(message, "бан @игрок")
+
+def cmd_unban(message):
+    if not is_admin(message.from_user.id, 2): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET is_banned=0 WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ @{parts[1].replace('@','')} разбанен!")
+    except: bot.reply_to(message, "разбан @игрок")
+
+def cmd_mute(message):
+    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET is_muted=1 WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"🔇 @{parts[1].replace('@','')} в муте!")
+    except: bot.reply_to(message, "мут @игрок")
+
+def cmd_unmute(message):
+    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET is_muted=0 WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"🔊 @{parts[1].replace('@','')} размучен!")
+    except: bot.reply_to(message, "размут @игрок")
+
+def cmd_warn(message):
+    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET warns=warns+1 WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"⚠️ @{parts[1].replace('@','')} получил варн!")
+    except: bot.reply_to(message, "варн @игрок")
+
+def cmd_unwarn(message):
+    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
+    try:
+        parts = message.text.split()
+        tid = get_uid(parts[1].replace('@',''))
+        if not tid: bot.reply_to(message, "❌ Не найден!"); return
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET warns=MAX(0,warns-1) WHERE user_id=?", (tid,))
+        db_conn.commit()
+        bot.reply_to(message, f"✅ Варн снят!")
+    except: bot.reply_to(message, "снятьварн @игрок")
+
+def cmd_rollback(message):
+    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
+    bot.reply_to(message, "♻ Откат в разработке")
+
+def cmd_admin_list(message):
+    c = db_conn.cursor()
+    c.execute("SELECT a.admin_level, p.username FROM admins a JOIN players p ON a.user_id=p.user_id")
+    lvls = {1:'Модер',2:'Админ',3:'Главный'}
+    text = "👑 АДМИНЫ:\n"
+    for lvl, un in c.fetchall(): text += f"• @{un} — {lvls.get(lvl,lvl)}\n"
+    bot.reply_to(message, text)
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    uid = call.from_user.id
+    p = get_player(uid)
+    if not p: return
+    if not has_country(uid):
+        bot.answer_callback_query(call.id, "❌ У вас нет страны! /start")
+        return
+    data = call.data
+    
+    if data.startswith('b_'):
+        bt = data[2:]
+        if bt in BUILDING_COSTS:
+            cost = BUILDING_COSTS[bt]
+            if p[5] < cost: bot.answer_callback_query(call.id, f"❌ {cost}💰"); return
+            if bt in BUILDING_DEPOSIT and not has_deposit(uid, BUILDING_DEPOSIT[bt]):
+                bot.answer_callback_query(call.id, "❌ Сначала найдите месторождение!"); return
+            if bt in BUILDING_POP and BUILDING_POP[bt] > 0:
+                free = p[3] - count_buildings_pop(uid)
+                if free < BUILDING_POP[bt]:
+                    bot.answer_callback_query(call.id, f"❌ Нужно {BUILDING_POP[bt]}👥 (свободно {free:.0f})"); return
+            upd_res(uid,'tenge',-cost)
+            if bt in BUILDING_DEPOSIT: use_deposit(uid, BUILDING_DEPOSIT[bt])
+            c = db_conn.cursor()
+            c.execute("SELECT id FROM cities WHERE user_id=? AND is_destroyed=0 ORDER BY is_capital DESC LIMIT 1", (uid,))
+            city = c.fetchone()
+            if city:
+                c.execute("SELECT quantity FROM buildings WHERE user_id=? AND city_id=? AND building_type=?", (uid,city[0],bt))
+                have = c.fetchone()
+                if have: c.execute("UPDATE buildings SET quantity=quantity+1 WHERE user_id=? AND city_id=? AND building_type=?", (uid,city[0],bt))
+                else: c.execute("INSERT INTO buildings (user_id, city_id, building_type) VALUES (?,?,?)", (uid,city[0],bt))
+            db_conn.commit()
+            bot.answer_callback_query(call.id, f"✅ {BUILDING_NAMES.get(bt,bt)}")
+            bot.send_message(call.message.chat.id, f"✅ {BUILDING_NAMES.get(bt,bt)} (-{cost}💰)")
+    
+    elif data.startswith('s_'):
+        dep = data[2:]
+        costs = {'oil':20,'iron':20,'coal':20,'sulfur':15,'uranium':100}
+        if dep in costs:
+            if p[5] < costs[dep]: bot.answer_callback_query(call.id, f"❌ {costs[dep]}💰"); return
+            upd_res(uid,'tenge',-costs[dep])
+            ok = random.randint(1,5)==1 if dep=='uranium' else random.random()<0.5
+            if ok:
+                c = db_conn.cursor()
+                c.execute("INSERT OR IGNORE INTO deposits (user_id, deposit_type) VALUES (?,?)", (uid,dep))
+                db_conn.commit()
+                bot.answer_callback_query(call.id, "✅ Найдено!")
+            else: bot.answer_callback_query(call.id, "❌ Пусто")
+    
+    elif data.startswith('e_'):
+        reg = data[2:]
+        rewards = {'europe':200,'asia':200,'africa':225,'america_north':200,'america_south':200,'australia':175}
+        names = {'europe':'Европа','asia':'Азия','africa':'Африка','america_north':'Сев.Америка','america_south':'Юж.Америка','australia':'Австралия'}
+        if p[5] < 70: bot.answer_callback_query(call.id, "❌ 70💰"); return
+        c = db_conn.cursor()
+        c.execute("SELECT id FROM expeditions WHERE user_id=? AND status='active'", (uid,))
+        if c.fetchone(): bot.answer_callback_query(call.id, "❌ Уже есть!"); return
+        upd_res(uid,'tenge',-70)
+        end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)", (uid,reg,end,rewards[reg]))
+        db_conn.commit()
+        bot.answer_callback_query(call.id, f"✅ {names[reg]}!")
+        bot.send_message(call.message.chat.id, f"🌍 {names[reg]} | +{rewards[reg]}👥 | 📅 {end}")
 
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
