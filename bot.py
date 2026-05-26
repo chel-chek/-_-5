@@ -44,26 +44,8 @@ BUILDING_DEPOSIT = {
     'oil_rig': 'oil', 'iron_mine': 'iron', 'coal_mine': 'coal',
 }
 
-RESOURCES = {
-    'тенге':'tenge','железо':'iron','топливо':'fuel','порох':'gunpowder',
-    'резина':'rubber','ткань':'fabric','уголь':'coal','цемент':'cement',
-    'уран':'uranium','дерево':'wood','кони':'horses','наука':'science_points',
-    'население':'population','спецматериал':'special_material'
-}
 
 creating_country = {}
-
-def fix_database():
-    try:
-        conn = sqlite3.connect('game.db')
-        c = conn.cursor()
-        c.execute("UPDATE players SET last_collection=NULL")
-        c.execute("UPDATE players SET last_expedition=NULL")
-        conn.commit()
-        conn.close()
-    except: pass
-
-fix_database()
 
 def init_db():
     conn = sqlite3.connect('game.db', check_same_thread=False)
@@ -163,20 +145,16 @@ def can_collect(uid):
     p = get_player(uid)
     if not p: return True
     last = p[15]
-    if not last or str(last).strip() == '' or str(last) == 'None':
+    if not last or str(last).strip() == '' or str(last) == 'None' or str(last) == 'NULL':
         return True
     try:
         last_str = str(last).strip()
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"]:
-            try:
-                last_dt = datetime.strptime(last_str[:19], fmt)
-                passed = (datetime.now() - last_dt).total_seconds()
-                return passed >= 86400
-            except:
-                continue
-        return True
+        last_dt = datetime.strptime(last_str[:19], "%Y-%m-%d %H:%M:%S")
+        passed = (datetime.now() - last_dt).total_seconds()
+        print(f"COLLECT CHECK: uid={uid}, last={last_str}, passed={passed/3600:.1f}h, can={passed >= 86400}")
+        return passed >= 86400
     except Exception as e:
-        print(f"ERROR can_collect: {e}")
+        print(f"COLLECT ERROR: {e}")
         return True
 
 def can_expedition(uid):
