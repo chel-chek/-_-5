@@ -20,7 +20,6 @@ TOKEN = '8786607133:AAGRlo79hTxWroCN-1vppbH9i0nCQrGS6OI'
 
 bot = telebot.TeleBot(TOKEN)
 
-# Константы
 BUILDING_POP = {
     'business_center': 350, 'lumberjack': 300, 'construction_factory': 300,
     'university': 400, 'fabric_factory': 350, 'stables': 250, 'barracks': 0,
@@ -44,6 +43,12 @@ BUILDING_DEPOSIT = {
     'oil_rig': 'oil', 'iron_mine': 'iron', 'coal_mine': 'coal',
 }
 
+RESOURCES = {
+    'тенге':'tenge','железо':'iron','топливо':'fuel','порох':'gunpowder',
+    'резина':'rubber','ткань':'fabric','уголь':'coal','цемент':'cement',
+    'уран':'uranium','дерево':'wood','кони':'horses','наука':'science_points',
+    'население':'population','спецматериал':'special_material'
+}
 
 creating_country = {}
 
@@ -139,52 +144,6 @@ def use_deposit(uid, dt):
     c = db_conn.cursor()
     c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,dt))
     db_conn.commit()
-
-def can_collect(uid):
-    """Проверяет можно ли собирать доход (раз в 24 часа)"""
-    p = get_player(uid)
-    if not p: 
-        print(f"DEBUG: player not found for {uid}")
-        return True
-    
-    # Выведем ВСЕ поля игрока
-    print(f"DEBUG player fields: len={len(p)}, fields={p}")
-    
-    last = p[15] if len(p) > 15 else None
-    print(f"DEBUG can_collect: uid={uid}, p[15]={last}")
-    
-    if not last or str(last).strip() == '' or str(last) == 'None' or str(last) == 'NULL':
-        print(f"DEBUG: last is empty, returning True")
-        return True
-    try:
-        last_str = str(last).strip()
-        last_dt = datetime.strptime(last_str[:19], "%Y-%m-%d %H:%M:%S")
-        passed = (datetime.now() - last_dt).total_seconds()
-        print(f"DEBUG: passed={passed/3600:.1f}h, can={passed >= 86400}")
-        return passed >= 86400
-    except Exception as e:
-        print(f"DEBUG ERROR: {e}")
-        return True
-
-def can_expedition(uid):
-    """Проверяет можно ли отправить экспедицию (раз в 72 часа)"""
-    p = get_player(uid)
-    if not p: return True
-    last = p[16] if len(p) > 16 else None
-    if not last or str(last).strip() == '' or str(last) == 'None':
-        return True
-    try:
-        last_str = str(last).strip()
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"]:
-            try:
-                last_dt = datetime.strptime(last_str[:19], fmt)
-                passed = (datetime.now() - last_dt).total_seconds()
-                return passed >= 259200
-            except:
-                continue
-        return True
-    except:
-        return True
 
 def save_db_to_github():
     try:
@@ -340,15 +299,26 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# ==================== КОМАНДЫ С ОГРАНИЧЕНИЯМИ ====================
+# ==================== КОМАНДЫ ====================
 
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
     
-    if not can_collect(uid):
-        bot.reply_to(message, "❌ Доход можно собирать раз в 24 часа!")
-        return
+    # ПРОВЕРКА: смотрим что в p[15]
+    last = p[15] if len(p) > 15 else None
+    bot.reply_to(message, f"🔍 p[15] = {last}")
+    
+    if last and str(last).strip() not in ['', 'None', 'NULL']:
+        try:
+            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            passed = (datetime.now() - last_dt).total_seconds()
+            bot.reply_to(message, f"🔍 Прошло: {passed/3600:.1f}ч (нужно 24ч)")
+            if passed < 86400:
+                bot.reply_to(message, "❌ Доход можно собирать раз в 24 часа!")
+                return
+        except:
+            pass
     
     if len(p) > 18 and p[18] and p[18] == datetime.now().strftime("%Y-%m-%d"):
         bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня.")
@@ -379,6 +349,8 @@ def cmd_collect(message):
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
     db_conn.commit()
+    
+    bot.reply_to(message, f"🔍 Сохранено: {today}")
     
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
     text = "📊 Доход собран:\n"
@@ -439,9 +411,17 @@ def cmd_blueprints(message):
 
 def cmd_expedition(message):
     uid = message.from_user.id
-    if not can_expedition(uid):
-        bot.reply_to(message, "❌ Экспедиция доступна раз в 3 дня!")
-        return
+    p = get_player(uid)
+    last = p[16] if len(p) > 16 else None
+    if last and str(last).strip() not in ['', 'None', 'NULL']:
+        try:
+            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            passed = (datetime.now() - last_dt).total_seconds()
+            if passed < 259200:
+                bot.reply_to(message, f"❌ Экспедиция доступна раз в 3 дня! (прошло {passed/3600:.0f}ч)")
+                return
+        except:
+            pass
     mk = types.InlineKeyboardMarkup(row_width=1)
     mk.add(types.InlineKeyboardButton("🌍 Европа +200", callback_data="e_europe"),
            types.InlineKeyboardButton("🏯 Азия +200", callback_data="e_asia"),
@@ -801,13 +781,20 @@ def callback_handler(call):
     
     elif data.startswith('e_'):
         uid = call.from_user.id
-        if not can_expedition(uid):
-            bot.answer_callback_query(call.id, "❌ Экспедиция раз в 3 дня!")
-            return
+        p = get_player(uid)
+        last = p[16] if len(p) > 16 else None
+        if last and str(last).strip() not in ['', 'None', 'NULL']:
+            try:
+                last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+                passed = (datetime.now() - last_dt).total_seconds()
+                if passed < 259200:
+                    bot.answer_callback_query(call.id, "❌ Экспедиция раз в 3 дня!")
+                    return
+            except:
+                pass
         reg = data[2:]
         rewards = {'europe':200,'asia':200,'africa':225,'america_north':200,'america_south':200,'australia':175}
         names = {'europe':'Европа','asia':'Азия','africa':'Африка','america_north':'Сев.Америка','america_south':'Юж.Америка','australia':'Австралия'}
-        p = get_player(uid)
         if p[5] < 70:
             bot.answer_callback_query(call.id, "❌ Нужно 70💰"); return
         upd_res(uid,'tenge',-70)
