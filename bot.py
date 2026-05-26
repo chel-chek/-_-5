@@ -53,6 +53,18 @@ RESOURCES = {
 
 creating_country = {}
 
+def fix_database():
+    try:
+        conn = sqlite3.connect('game.db')
+        c = conn.cursor()
+        c.execute("UPDATE players SET last_collection=NULL")
+        c.execute("UPDATE players SET last_expedition=NULL")
+        conn.commit()
+        conn.close()
+    except: pass
+
+fix_database()
+
 def init_db():
     conn = sqlite3.connect('game.db', check_same_thread=False)
     c = conn.cursor()
