@@ -145,6 +145,30 @@ def use_deposit(uid, dt):
     c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,dt))
     db_conn.commit()
 
+def can_collect(uid):
+    """Проверка: прошло 24 часа с последнего сбора"""
+    p = get_player(uid)
+    if not p: return True
+    last = p[15]
+    if not last or str(last) in ['0', '0.0', 'None', 'NULL', '']: return True
+    try:
+        last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last_dt).total_seconds() >= 86400
+    except:
+        return True
+
+def can_expedition(uid):
+    """Проверка: прошло 72 часа с последней экспедиции"""
+    p = get_player(uid)
+    if not p: return True
+    last = p[16] if len(p) > 16 else None
+    if not last or str(last) in ['0', '0.0', 'None', 'NULL', '']: return True
+    try:
+        last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last_dt).total_seconds() >= 259200
+    except:
+        return True
+
 def save_db_to_github():
     try:
         token = os.environ.get('GITHUB_TOKEN','')
@@ -299,26 +323,13 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# ==================== КОМАНДЫ ====================
-
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
     
-    # ПРОВЕРКА: смотрим что в p[15]
-    last = p[15] if len(p) > 15 else None
-    bot.reply_to(message, f"🔍 p[15] = {last}")
-    
-    if last and str(last).strip() not in ['', 'None', 'NULL']:
-        try:
-            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-            passed = (datetime.now() - last_dt).total_seconds()
-            bot.reply_to(message, f"🔍 Прошло: {passed/3600:.1f}ч (нужно 24ч)")
-            if passed < 86400:
-                bot.reply_to(message, "❌ Доход можно собирать раз в 24 часа!")
-                return
-        except:
-            pass
+    if not can_collect(uid):
+        bot.reply_to(message, "❌ Доход можно собирать раз в 24 часа!")
+        return
     
     if len(p) > 18 and p[18] and p[18] == datetime.now().strftime("%Y-%m-%d"):
         bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня.")
@@ -350,13 +361,27 @@ def cmd_collect(message):
     c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
     db_conn.commit()
     
-    bot.reply_to(message, f"🔍 Сохранено: {today}")
-    
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
     text = "📊 Доход собран:\n"
     for res, val in inc.items():
         text += f"{nm.get(res,res)} +{val}\n"
     bot.reply_to(message, text)
+
+def cmd_expedition(message):
+    uid = message.from_user.id
+    if not can_expedition(uid):
+        bot.reply_to(message, "❌ Экспедиция доступна раз в 3 дня!")
+        return
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(types.InlineKeyboardButton("🌍 Европа +200", callback_data="e_europe"),
+           types.InlineKeyboardButton("🏯 Азия +200", callback_data="e_asia"),
+           types.InlineKeyboardButton("🌴 Африка +225", callback_data="e_africa"),
+           types.InlineKeyboardButton("🌎 Сев.Америка +200", callback_data="e_america_north"),
+           types.InlineKeyboardButton("🌎 Юж.Америка +200", callback_data="e_america_south"),
+           types.InlineKeyboardButton("🦘 Австралия +175", callback_data="e_australia"))
+    bot.reply_to(message, "🌍 Куда? (70💰, раз в 3 дня)", reply_markup=mk)
+
+# Остальные команды (build_menu, search_menu, warehouse, cities, blueprints, help, craft, dismantle, recipe, create_recipe, fort, new_city, repair_city, move_capital, share_bp, look, top, give, take, give_all, ban, unban, mute, unmute, warn, unwarn, admin_list, callback_handler)
 
 def cmd_build_menu(message):
     mk = types.InlineKeyboardMarkup(row_width=2)
@@ -408,28 +433,6 @@ def cmd_blueprints(message):
     if own: text += "\n".join([f"• {b[0]}" for b in own])
     else: text += "Нет чертежей"
     bot.reply_to(message, text)
-
-def cmd_expedition(message):
-    uid = message.from_user.id
-    p = get_player(uid)
-    last = p[16] if len(p) > 16 else None
-    if last and str(last).strip() not in ['', 'None', 'NULL']:
-        try:
-            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-            passed = (datetime.now() - last_dt).total_seconds()
-            if passed < 259200:
-                bot.reply_to(message, f"❌ Экспедиция доступна раз в 3 дня! (прошло {passed/3600:.0f}ч)")
-                return
-        except:
-            pass
-    mk = types.InlineKeyboardMarkup(row_width=1)
-    mk.add(types.InlineKeyboardButton("🌍 Европа +200", callback_data="e_europe"),
-           types.InlineKeyboardButton("🏯 Азия +200", callback_data="e_asia"),
-           types.InlineKeyboardButton("🌴 Африка +225", callback_data="e_africa"),
-           types.InlineKeyboardButton("🌎 Сев.Америка +200", callback_data="e_america_north"),
-           types.InlineKeyboardButton("🌎 Юж.Америка +200", callback_data="e_america_south"),
-           types.InlineKeyboardButton("🦘 Австралия +175", callback_data="e_australia"))
-    bot.reply_to(message, "🌍 Куда? (70💰, раз в 3 дня)", reply_markup=mk)
 
 def cmd_help(message):
     bot.reply_to(message, "📖 КОМАНДЫ: анкета, собрать, строить, поиск, склад, города, чертежи, эксп, помощь\nкрафт X НАЗВАНИЕ, разобрать X НАЗВАНИЕ, рецепт НАЗВАНИЕ\n!рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня\nдать @игрок ресурс кол-во (админ)")
@@ -781,17 +784,9 @@ def callback_handler(call):
     
     elif data.startswith('e_'):
         uid = call.from_user.id
-        p = get_player(uid)
-        last = p[16] if len(p) > 16 else None
-        if last and str(last).strip() not in ['', 'None', 'NULL']:
-            try:
-                last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-                passed = (datetime.now() - last_dt).total_seconds()
-                if passed < 259200:
-                    bot.answer_callback_query(call.id, "❌ Экспедиция раз в 3 дня!")
-                    return
-            except:
-                pass
+        if not can_expedition(uid):
+            bot.answer_callback_query(call.id, "❌ Экспедиция раз в 3 дня!")
+            return
         reg = data[2:]
         rewards = {'europe':200,'asia':200,'africa':225,'america_north':200,'america_south':200,'australia':175}
         names = {'europe':'Европа','asia':'Азия','africa':'Африка','america_north':'Сев.Америка','america_south':'Юж.Америка','australia':'Австралия'}
