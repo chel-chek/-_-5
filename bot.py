@@ -143,18 +143,27 @@ def use_deposit(uid, dt):
 def can_collect(uid):
     """Проверяет можно ли собирать доход (раз в 24 часа)"""
     p = get_player(uid)
-    if not p: return True
-    last = p[15]
+    if not p: 
+        print(f"DEBUG: player not found for {uid}")
+        return True
+    
+    # Выведем ВСЕ поля игрока
+    print(f"DEBUG player fields: len={len(p)}, fields={p}")
+    
+    last = p[15] if len(p) > 15 else None
+    print(f"DEBUG can_collect: uid={uid}, p[15]={last}")
+    
     if not last or str(last).strip() == '' or str(last) == 'None' or str(last) == 'NULL':
+        print(f"DEBUG: last is empty, returning True")
         return True
     try:
         last_str = str(last).strip()
         last_dt = datetime.strptime(last_str[:19], "%Y-%m-%d %H:%M:%S")
         passed = (datetime.now() - last_dt).total_seconds()
-        print(f"COLLECT CHECK: uid={uid}, last={last_str}, passed={passed/3600:.1f}h, can={passed >= 86400}")
+        print(f"DEBUG: passed={passed/3600:.1f}h, can={passed >= 86400}")
         return passed >= 86400
     except Exception as e:
-        print(f"COLLECT ERROR: {e}")
+        print(f"DEBUG ERROR: {e}")
         return True
 
 def can_expedition(uid):
