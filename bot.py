@@ -97,14 +97,6 @@ def init_db():
 
 db_conn = init_db()
 
-# Сброс таймеров
-try:
-    c = db_conn.cursor()
-    c.execute("UPDATE players SET last_collection=NULL")
-    c.execute("UPDATE players SET last_expedition=NULL")
-    db_conn.commit()
-except: pass
-
 def get_player(uid):
     c = db_conn.cursor()
     c.execute("SELECT * FROM players WHERE user_id=?", (uid,))
