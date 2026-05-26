@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 import random
 import time
 import threading
-from flask import Flask
+import subprocess
 import os
+import urllib.request
+from flask import Flask
 
 app = Flask(__name__)
 
@@ -18,19 +20,17 @@ TOKEN = '8786607133:AAGRlo79hTxWroCN-1vppbH9i0nCQrGS6OI'
 
 bot = telebot.TeleBot(TOKEN)
 
+# Константы
 BUILDING_POP = {
     'business_center': 350, 'lumberjack': 300, 'construction_factory': 300,
     'university': 400, 'fabric_factory': 350, 'stables': 250, 'barracks': 0,
-    'oil_rig': 300, 'iron_mine': 300, 'coal_mine': 250, 'vdv_barracks': 100,
-    'gunpowder_factory': 400, 'uranium_mine': 800, 'uranium_lab': 600,
-    'processing_plant': 700, 'port': 200, 'military_engineering': 0
+    'oil_rig': 300, 'iron_mine': 300, 'coal_mine': 250,
 }
 
 BUILDING_COSTS = {
     'business_center': 65, 'lumberjack': 55, 'construction_factory': 50,
     'university': 90, 'fabric_factory': 50, 'stables': 60, 'barracks': 70,
-    'oil_rig': 70, 'iron_mine': 65, 'coal_mine': 70, 'vdv_barracks': 100,
-    'military_engineering': 1500
+    'oil_rig': 70, 'iron_mine': 65, 'coal_mine': 70,
 }
 
 BUILDING_NAMES = {
@@ -38,116 +38,73 @@ BUILDING_NAMES = {
     'construction_factory': 'Стройзавод', 'university': 'Университет',
     'fabric_factory': 'Тканевый', 'stables': 'Конюшни', 'barracks': 'Казарма',
     'oil_rig': 'Нефтяная вышка', 'iron_mine': 'Жел.шахта', 'coal_mine': 'Уг.шахта',
-    'vdv_barracks': 'Казарма ВДВ', 'military_engineering': 'Воен-инж.завод'
 }
 
 BUILDING_DEPOSIT = {
-    'oil_rig': 'oil', 'iron_mine': 'iron', 'coal_mine': 'coal', 'uranium_mine': 'uranium'
+    'oil_rig': 'oil', 'iron_mine': 'iron', 'coal_mine': 'coal',
 }
 
 RESOURCES = {
-    'тенге':'tenge','деньги':'tenge',
-    'железо':'iron','железа':'iron',
-    'топливо':'fuel','топлива':'fuel','нефть':'fuel','бензин':'fuel',
-    'порох':'gunpowder','пороха':'gunpowder',
-    'резина':'rubber','резины':'rubber',
-    'ткань':'fabric','ткани':'fabric',
-    'уголь':'coal','угля':'coal',
-    'цемент':'cement','цемента':'cement','бетон':'cement',
-    'уран':'uranium','урана':'uranium',
-    'дерево':'wood','дерева':'wood','древесина':'wood',
-    'кони':'horses','коней':'horses','лошади':'horses',
-    'наука':'science_points','науки':'science_points',
-    'население':'population','люди':'population','населения':'population',
-    'спецматериал':'special_material'
+    'тенге':'tenge','железо':'iron','топливо':'fuel','порох':'gunpowder',
+    'резина':'rubber','ткань':'fabric','уголь':'coal','цемент':'cement',
+    'уран':'uranium','дерево':'wood','кони':'horses','наука':'science_points',
+    'население':'population','спецматериал':'special_material'
 }
 
-MAX_CITIES = 15
 creating_country = {}
 
 def init_db():
     conn = sqlite3.connect('game.db', check_same_thread=False)
     c = conn.cursor()
-    
     c.execute('''CREATE TABLE IF NOT EXISTS players
                  (user_id INTEGER PRIMARY KEY, username TEXT,
-                  country_name TEXT DEFAULT 'Неизвестная',
-                  population REAL DEFAULT 1000,
+                  country_name TEXT DEFAULT 'Unknown', population REAL DEFAULT 1000,
                   science_points REAL DEFAULT 0, tenge REAL DEFAULT 5000,
-                  iron REAL DEFAULT 0, fuel REAL DEFAULT 0,
-                  gunpowder REAL DEFAULT 0, rubber REAL DEFAULT 0,
-                  fabric REAL DEFAULT 0, coal REAL DEFAULT 0,
-                  cement REAL DEFAULT 0, uranium REAL DEFAULT 0,
-                  wood REAL DEFAULT 0, horses REAL DEFAULT 0,
-                  special_material REAL DEFAULT 0,
+                  iron REAL DEFAULT 0, fuel REAL DEFAULT 0, gunpowder REAL DEFAULT 0,
+                  rubber REAL DEFAULT 0, fabric REAL DEFAULT 0, coal REAL DEFAULT 0,
+                  cement REAL DEFAULT 0, uranium REAL DEFAULT 0, wood REAL DEFAULT 0,
+                  horses REAL DEFAULT 0, special_material REAL DEFAULT 0,
                   last_collection TEXT, game_year REAL DEFAULT 1904)''')
-    
-    for col_name, col_type in [
-        ('created_date', 'TEXT'),('is_banned', 'INTEGER DEFAULT 0'),
-        ('is_muted', 'INTEGER DEFAULT 0'),('warns', 'INTEGER DEFAULT 0'),
-        ('last_login', 'TEXT')
-    ]:
-        try: c.execute(f"ALTER TABLE players ADD COLUMN {col_name} {col_type}")
+    for col, t in [('created_date','TEXT'),('is_banned','INTEGER DEFAULT 0'),
+                   ('is_muted','INTEGER DEFAULT 0'),('warns','INTEGER DEFAULT 0')]:
+        try: c.execute(f"ALTER TABLE players ADD COLUMN {col} {t}")
         except: pass
-    
     c.execute('''CREATE TABLE IF NOT EXISTS cities
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER, city_name TEXT,
-                  is_capital INTEGER DEFAULT 0, is_destroyed INTEGER DEFAULT 0)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
+                  city_name TEXT, is_capital INTEGER DEFAULT 0, is_destroyed INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS buildings
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER, city_id INTEGER,
-                  building_type TEXT, quantity INTEGER DEFAULT 1)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
+                  city_id INTEGER, building_type TEXT, quantity INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS deposits
-                 (user_id INTEGER, deposit_type TEXT,
-                  found INTEGER DEFAULT 1, built INTEGER DEFAULT 0)''')
+                 (user_id INTEGER, deposit_type TEXT, found INTEGER DEFAULT 1, built INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS vehicles
                  (user_id INTEGER, vehicle_name TEXT, quantity INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS vehicle_recipes
-                 (vehicle_name TEXT PRIMARY KEY,
-                  iron_cost REAL, fuel_cost REAL, gunpowder_cost REAL,
-                  rubber_cost REAL, fabric_cost REAL, coal_cost REAL,
-                  special_material_cost REAL)''')
+                 (vehicle_name TEXT PRIMARY KEY, iron_cost REAL, fuel_cost REAL,
+                  gunpowder_cost REAL, rubber_cost REAL, fabric_cost REAL,
+                  coal_cost REAL, special_material_cost REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS blueprints
-                 (blueprint_name TEXT PRIMARY KEY, owner_id INTEGER,
-                  year_researched INTEGER)''')
+                 (blueprint_name TEXT PRIMARY KEY, owner_id INTEGER, year_researched INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS blueprint_access
                  (blueprint_name TEXT, player_id INTEGER, granted_by INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS expeditions
                  (user_id INTEGER, region TEXT, end_date TEXT,
                   reward_population INTEGER, status TEXT DEFAULT 'active')''')
-    c.execute('''CREATE TABLE IF NOT EXISTS action_log
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER, action_type TEXT, details TEXT,
-                  resources TEXT, timestamp TEXT, can_rollback INTEGER DEFAULT 1)''')
     c.execute('''CREATE TABLE IF NOT EXISTS admins
-                 (user_id INTEGER PRIMARY KEY, admin_level INTEGER DEFAULT 1,
-                  added_by INTEGER, added_date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS default_resources
-                 (resource_name TEXT PRIMARY KEY, default_value REAL)''')
-    
-    defaults = [('population',1000),('tenge',5000),('science_points',0),('iron',0),('fuel',0),
-                ('gunpowder',0),('rubber',0),('fabric',0),('coal',0),('cement',0),
-                ('uranium',0),('wood',0),('horses',0),('special_material',0)]
-    for res, val in defaults:
-        c.execute("INSERT OR IGNORE INTO default_resources VALUES (?,?)", (res,val))
-    
+                 (user_id INTEGER PRIMARY KEY, admin_level INTEGER DEFAULT 1)''')
     conn.commit()
     return conn
 
 db_conn = init_db()
 
 def get_player(uid):
-    try:
-        c = db_conn.cursor()
-        c.execute("SELECT * FROM players WHERE user_id=?", (uid,))
-        return c.fetchone()
-    except: return None
+    c = db_conn.cursor()
+    c.execute("SELECT * FROM players WHERE user_id=?", (uid,))
+    return c.fetchone()
 
 def has_country(uid):
     p = get_player(uid)
-    if not p: return False
-    if not p[2] or p[2] == 'Неизвестная': return False
+    if not p or not p[2] or p[2] == 'Unknown': return False
     c = db_conn.cursor()
     c.execute("SELECT COUNT(*) FROM cities WHERE user_id=?", (uid,))
     return c.fetchone()[0] >= 5
@@ -174,64 +131,65 @@ def count_buildings_pop(uid):
     c = db_conn.cursor()
     c.execute("SELECT building_type, SUM(quantity) FROM buildings WHERE user_id=? GROUP BY building_type", (uid,))
     total = 0
-    for btype, qty in c.fetchall():
-        if qty and btype in BUILDING_POP:
-            total += BUILDING_POP[btype] * qty
+    for bt, q in c.fetchall():
+        if q and bt in BUILDING_POP: total += BUILDING_POP[bt] * q
     return total
 
-def has_deposit(uid, deposit_type):
+def has_deposit(uid, dt):
     c = db_conn.cursor()
-    c.execute("SELECT COUNT(*) FROM deposits WHERE user_id=? AND deposit_type=? AND built=0", (uid,deposit_type))
+    c.execute("SELECT COUNT(*) FROM deposits WHERE user_id=? AND deposit_type=? AND built=0", (uid,dt))
     return c.fetchone()[0] > 0
 
-def use_deposit(uid, deposit_type):
+def use_deposit(uid, dt):
     c = db_conn.cursor()
-    c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,deposit_type))
+    c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,dt))
     db_conn.commit()
 
-def show_anketa(uid, target_id=None):
-    if target_id is None: target_id = uid
-    p = get_player(target_id)
+def save_db_to_github():
+    try:
+        token = os.environ.get('GITHUB_TOKEN','')
+        repo = os.environ.get('GITHUB_REPO','')
+        if not token or not repo: return
+        subprocess.run(['git','config','--global','user.email','bot@render.com'],capture_output=True)
+        subprocess.run(['git','config','--global','user.name','Render Bot'],capture_output=True)
+        subprocess.run(['git','add','game.db'],capture_output=True,cwd='/opt/render/project/src')
+        subprocess.run(['git','commit','-m','Auto-save'],capture_output=True,cwd='/opt/render/project/src')
+        subprocess.run(['git','push',f'https://{token}@github.com/{repo}.git','HEAD:main'],capture_output=True,cwd='/opt/render/project/src')
+    except: pass
+
+def keep_alive():
+    while True:
+        time.sleep(840)
+        try:
+            url = os.environ.get('RENDER_EXTERNAL_URL','')
+            if url: urllib.request.urlopen(f"{url}/health",timeout=10)
+        except: pass
+
+def show_anketa(uid, tid=None):
+    if tid is None: tid = uid
+    p = get_player(tid)
     if not p: return "Страна не найдена"
     c = db_conn.cursor()
-    c.execute("SELECT id, city_name, is_capital, is_destroyed FROM cities WHERE user_id=?", (target_id,))
+    c.execute("SELECT city_name, is_capital, is_destroyed FROM cities WHERE user_id=?", (tid,))
     cities = c.fetchall()
-    c.execute("SELECT vehicle_name, quantity FROM vehicles WHERE user_id=? AND quantity>0 ORDER BY vehicle_name", (target_id,))
+    c.execute("SELECT vehicle_name, quantity FROM vehicles WHERE user_id=? AND quantity>0", (tid,))
     veh = c.fetchall()
-    
-    year = p[17] if len(p) > 17 and p[17] else 1904
-    try: year = float(year)
-    except: year = 1904
-    
-    warns = p[22] if len(p) > 22 else 0
-    used_pop = count_buildings_pop(target_id)
-    free_pop = p[3] - used_pop
-    
-    text = f"📋 {p[2]} | 📅 {year:.0f} год\n"
-    text += f"👤 @{p[1]}\n\n"
-    text += f"👥 {p[3]:.0f} (занято {used_pop:.0f}, свободно {free_pop:.0f})\n"
-    text += f"🔬 {p[4]:.0f} | 💰 {p[5]:.0f}\n"
-    text += f"🔩 {p[6]:.0f} | ⛽ {p[7]:.0f} | 💥 {p[8]:.0f} | 🪨 {p[10]:.0f}\n"
-    text += f"🪵 {p[14]:.0f} | 🏗 {p[11]:.0f} | 🧵 {p[9]:.0f} | 🐴 {p[15]:.0f}\n"
-    if warns > 0: text += f"⚠️ Варны: {warns}/3\n"
-    
-    text += f"\n🏙 ГОРОДА ({len(cities)}/{MAX_CITIES}):\n"
-    for city_id, nm, cap, des in cities:
+    yr = p[17] if len(p)>17 and p[17] else 1904
+    try: yr = float(yr)
+    except: yr = 1904
+    used = count_buildings_pop(tid)
+    free = p[3] - used
+    warns = p[22] if len(p)>22 else 0
+    text = f"📋 {p[2]} | {yr:.0f} год\n👤 @{p[1]}\n\n👥 {p[3]:.0f} (занято {used:.0f}, своб {free:.0f})\n💰 {p[5]:.0f} | 🔬 {p[4]:.0f}\n🔩 {p[6]:.0f} | ⛽ {p[7]:.0f} | 💥 {p[8]:.0f} | 🪨 {p[10]:.0f}\n🪵 {p[14]:.0f} | 🏗 {p[11]:.0f}"
+    if warns > 0: text += f"\n⚠️ Варны: {warns}/3"
+    text += f"\n\n🏙 ГОРОДА:\n"
+    for nm, cap, des in cities:
         s = "⭐" if cap else "•"
-        s += " ❌" if des else ""
-        c.execute("SELECT building_type, quantity FROM buildings WHERE user_id=? AND city_id=?", (target_id, city_id))
-        blds = c.fetchall()
-        text += f"{s} {nm}"
-        if blds:
-            bld_str = ", ".join([f"{BUILDING_NAMES.get(b[0],b[0])} x{b[1]}" for b in blds])
-            text += f" ({bld_str})"
-        text += "\n"
-    
+        if des: s += "❌"
+        text += f"{s} {nm}\n"
     if veh:
-        total_veh = sum(v[1] for v in veh)
-        text += f"\n📦 СКЛАД ({total_veh} ед.):\n"
-        for v,q in veh[:10]: text += f"• {v}: {q}\n"
-    
+        text += f"\n📦 СКЛАД: {sum(v[1] for v in veh)} ед.\n"
+        for v,q in veh[:5]: text += f"• {v}: {q}\n"
     return text
 
 @bot.message_handler(commands=['set_head_admin'])
@@ -241,7 +199,7 @@ def set_head_admin(message):
     c.execute("SELECT COUNT(*) FROM admins WHERE admin_level=3")
     if c.fetchone()[0] > 0:
         bot.reply_to(message, "❌ Главный админ уже назначен!"); return
-    c.execute("INSERT OR REPLACE INTO admins VALUES (?,3,0,?)", (uid, datetime.now().strftime("%Y-%m-%d")))
+    c.execute("INSERT OR REPLACE INTO admins VALUES (?,3)", (uid,))
     db_conn.commit()
     bot.reply_to(message, "✅ Вы стали ГЛАВНЫМ АДМИНОМ!")
 
@@ -250,23 +208,18 @@ def start(message):
     uid = message.from_user.id
     uname = message.from_user.username or f"Player_{uid}"
     p = get_player(uid)
-    
-    banned = p[20] if p and len(p) > 20 else 0
-    if banned == 1:
+    if p and len(p)>20 and p[20]==1:
         bot.reply_to(message, "🚫 Вы забанены!"); return
-    
     if p and has_country(uid):
         show_menu(message.chat.id)
-        bot.send_message(message.chat.id, "🎮 С возвращением! помощь — команды")
+        bot.send_message(message.chat.id, "🎮 С возвращением!")
         return
-    
     c = db_conn.cursor()
-    c.execute("INSERT OR REPLACE INTO players (user_id, username, created_date, last_login) VALUES (?,?,?,?)",
-              (uid, uname, datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d")))
+    c.execute("INSERT OR REPLACE INTO players (user_id, username, created_date) VALUES (?,?,?)",
+              (uid, uname, datetime.now().strftime("%Y-%m-%d")))
     db_conn.commit()
-    
     creating_country[uid] = {'step': 'capital'}
-    bot.send_message(message.chat.id, "🎮 Добро пожаловать!\n\nВведите название столицы:")
+    bot.send_message(message.chat.id, "🎮 Добро пожаловать!\nВведите название столицы:")
 
 def show_menu(chat_id):
     markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
@@ -279,17 +232,16 @@ def handle_all(message):
         uid = message.from_user.id
         text = message.text.strip()
         
-        # Создание страны
         if uid in creating_country:
-            state = creating_country[uid]
-            if state['step'] == 'capital':
+            st = creating_country[uid]
+            if st['step'] == 'capital':
                 c = db_conn.cursor()
                 c.execute("INSERT INTO cities (user_id, city_name, is_capital) VALUES (?,?,1)", (uid, text))
                 db_conn.commit()
-                state['step'] = 'cities'
-                bot.send_message(message.chat.id, f"✅ Столица: {text}\n\nВведите 4 города через запятую:")
+                st['step'] = 'cities'
+                bot.send_message(message.chat.id, f"✅ Столица: {text}\nВведите 4 города через запятую:")
                 return
-            elif state['step'] == 'cities':
+            elif st['step'] == 'cities':
                 cities = [c.strip() for c in text.split(',')]
                 if len(cities) != 4:
                     bot.send_message(message.chat.id, "❌ Нужно ровно 4 города!"); return
@@ -297,44 +249,38 @@ def handle_all(message):
                 for city in cities:
                     c.execute("INSERT INTO cities (user_id, city_name) VALUES (?,?)", (uid, city))
                 db_conn.commit()
-                state['step'] = 'country'
+                st['step'] = 'country'
                 bot.send_message(message.chat.id, "Введите название страны:"); return
-            elif state['step'] == 'country':
+            elif st['step'] == 'country':
                 c = db_conn.cursor()
                 c.execute("UPDATE players SET country_name=? WHERE user_id=?", (text, uid))
                 db_conn.commit()
                 del creating_country[uid]
                 show_menu(uid)
-                bot.send_message(message.chat.id, "🎉 СТРАНА СОЗДАНА!\n\nпомощь — команды\nсобрать — доход\nстроить — здания")
+                bot.send_message(message.chat.id, "🎉 СТРАНА СОЗДАНА!")
                 return
         
         p = get_player(uid)
-        if not p or not has_country(uid):
-            if text == '/start': return
-            return  # Молча игнорируем
-        
-        banned = p[20] if len(p) > 20 else 0
-        muted = p[21] if len(p) > 21 else 0
-        if banned == 1: return
-        if muted == 1: bot.reply_to(message, "🔇 Вы в муте!"); return
+        if not p or not has_country(uid): return
+        if len(p)>20 and p[20]==1: return
+        if len(p)>21 and p[21]==1: bot.reply_to(message, "🔇 Вы в муте!"); return
 
-        # Команды
         if text in ['анкета']: bot.reply_to(message, show_anketa(uid))
-        elif text in ['собрать', 'собрать доход']: cmd_collect(message)
-        elif text in ['строить', 'стройка']: cmd_build_menu(message)
+        elif text in ['собрать']: cmd_collect(message)
+        elif text in ['строить','стройка']: cmd_build_menu(message)
         elif text == 'поиск': cmd_search_menu(message)
         elif text == 'склад': cmd_warehouse(message)
         elif text == 'города': cmd_cities(message)
         elif text == 'чертежи': cmd_blueprints(message)
         elif text.startswith('эксп'): cmd_expedition(message)
-        elif text in ['помощь', 'команды']: cmd_help(message)
+        elif text in ['помощь','команды']: cmd_help(message)
         elif text.startswith('крафт '): cmd_craft(message)
         elif text.startswith('разобрать ') or text.startswith('разбор '): cmd_dismantle(message)
         elif text.startswith('рецепт '): cmd_recipe(message)
         elif text.startswith('!рецепт'): cmd_create_recipe(message)
         elif any(text.startswith(w) for w in ['дот ','бункер ','каземат ']): cmd_fort(message)
-        elif any(text.startswith(w) for w in ['город новый ','построить город ']): cmd_new_city(message)
-        elif any(text.startswith(w) for w in ['чинить ','город чинить ']): cmd_repair_city(message)
+        elif text.startswith('город новый '): cmd_new_city(message)
+        elif text.startswith('чинить '): cmd_repair_city(message)
         elif text.startswith('столица '): cmd_move_capital(message)
         elif text.startswith('поделиться '): cmd_share_bp(message)
         elif text.startswith('разведка '): cmd_look(message)
@@ -347,48 +293,45 @@ def handle_all(message):
         elif text.startswith('разбан '): cmd_unban(message)
         elif text.startswith('мут '): cmd_mute(message)
         elif text.startswith('размут '): cmd_unmute(message)
-        elif text.startswith('варн ') or text.startswith('пред '): cmd_warn(message)
+        elif text.startswith('варн '): cmd_warn(message)
         elif text.startswith('снятьварн '): cmd_unwarn(message)
-        elif text.startswith('откат '): cmd_rollback(message)
         elif text == 'админы': cmd_admin_list(message)
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# ==================== ВСЕ КОМАНДЫ ====================
+# Команды
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
     today = datetime.now().strftime("%Y-%m-%d")
-    last_coll = p[15] if len(p) > 15 else None
-    created = p[18] if len(p) > 18 else None
-    if last_coll == today: bot.reply_to(message, "❌ Доход уже собран сегодня!"); return
-    if created and created == today: bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня."); return
+    if p[15] == today: bot.reply_to(message, "❌ Уже собрано!"); return
+    if len(p)>18 and p[18] == today: bot.reply_to(message, "❌ Первый день!"); return
     c = db_conn.cursor()
     c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities c ON b.city_id=c.id WHERE b.user_id=? AND c.is_destroyed=0 GROUP BY b.building_type", (uid,))
     bld = dict(c.fetchall())
     inc = {}
-    if 'lumberjack' in bld: inc['wood'] = 80 * bld['lumberjack']
-    if 'construction_factory' in bld: inc['cement'] = 100 * bld['construction_factory']
-    if 'university' in bld: inc['science_points'] = 2 * bld['university']
-    if 'business_center' in bld: inc['tenge'] = 25 * bld['business_center']
-    if 'iron_mine' in bld: inc['iron'] = 150 * bld['iron_mine']
-    if 'oil_rig' in bld: inc['fuel'] = 150 * bld['oil_rig']
-    if 'coal_mine' in bld: inc['coal'] = 125 * bld['coal_mine']
-    if 'fabric_factory' in bld: inc['fabric'] = 50 * bld['fabric_factory']
-    if 'stables' in bld: inc['horses'] = 20 * bld['stables']
+    if 'lumberjack' in bld: inc['wood'] = 80*bld['lumberjack']
+    if 'construction_factory' in bld: inc['cement'] = 100*bld['construction_factory']
+    if 'university' in bld: inc['science_points'] = 2*bld['university']
+    if 'business_center' in bld: inc['tenge'] = 25*bld['business_center']
+    if 'iron_mine' in bld: inc['iron'] = 150*bld['iron_mine']
+    if 'oil_rig' in bld: inc['fuel'] = 150*bld['oil_rig']
+    if 'coal_mine' in bld: inc['coal'] = 125*bld['coal_mine']
+    if 'fabric_factory' in bld: inc['fabric'] = 50*bld['fabric_factory']
+    if 'stables' in bld: inc['horses'] = 20*bld['stables']
     days = 1
-    if last_coll:
+    if p[15]:
         try:
-            ld = datetime.strptime(last_coll, "%Y-%m-%d")
-            days = max(1, (datetime.now() - ld).days)
-        except: days = 1
+            ld = datetime.strptime(p[15],"%Y-%m-%d")
+            days = max(1,(datetime.now()-ld).days)
+        except: pass
     for res, val in inc.items(): upd_res(uid, res, val*days)
     c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today,uid))
     db_conn.commit()
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
     text = f"📊 Доход за {days} дн.:\n"
     for res, val in inc.items(): text += f"{nm.get(res,res)} +{val*days}\n"
-    if not inc: text += "Нет работающих зданий.\n"
+    if not inc: text += "Нет зданий.\n"
     bot.reply_to(message, text)
 
 def cmd_build_menu(message):
@@ -416,7 +359,7 @@ def cmd_search_menu(message):
 
 def cmd_warehouse(message):
     c = db_conn.cursor()
-    c.execute("SELECT vehicle_name, quantity FROM vehicles WHERE user_id=? AND quantity>0 ORDER BY vehicle_name", (message.from_user.id,))
+    c.execute("SELECT vehicle_name, quantity FROM vehicles WHERE user_id=? AND quantity>0", (message.from_user.id,))
     items = c.fetchall()
     if not items: bot.reply_to(message, "📦 Склад пуст"); return
     text = "📦 СКЛАД:\n"
@@ -430,19 +373,16 @@ def cmd_cities(message):
     text = "🏙 ГОРОДА:\n"
     for nm, cap, des in cities:
         s = "⭐ " if cap else "• "
-        text += f"{s}{nm}{' ❌' if des else ' ✅'}\n"
+        text += f"{s}{nm}{' ❌' if des else ''}\n"
     bot.reply_to(message, text)
 
 def cmd_blueprints(message):
     c = db_conn.cursor()
     c.execute("SELECT blueprint_name FROM blueprints WHERE owner_id=?", (message.from_user.id,))
     own = c.fetchall()
-    c.execute("SELECT blueprint_name FROM blueprint_access WHERE player_id=?", (message.from_user.id,))
-    acc = c.fetchall()
     text = "📋 ЧЕРТЕЖИ:\n"
-    if own: text += "\n🔒 Мои:\n" + "\n".join([f"• {b[0]}" for b in own])
-    if acc: text += "\n🔓 Доступ:\n" + "\n".join([f"• {b[0]}" for b in acc])
-    if not own and not acc: text += "Нет чертежей"
+    if own: text += "\n".join([f"• {b[0]}" for b in own])
+    else: text += "Нет чертежей"
     bot.reply_to(message, text)
 
 def cmd_expedition(message):
@@ -456,15 +396,7 @@ def cmd_expedition(message):
     bot.reply_to(message, "🌍 Куда? (70💰, 3 дня)", reply_markup=mk)
 
 def cmd_help(message):
-    bot.reply_to(message, """📖 КОМАНДЫ:
-анкета, собрать, строить, поиск, склад, города, чертежи, эксп, помощь
-крафт КОЛИЧЕСТВО НАЗВАНИЕ — построить
-разобрать КОЛИЧЕСТВО НАЗВАНИЕ — разобрать
-!рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня
-дот КЛАСС Город, бункер КЛАСС Город, каземат КЛАСС Город
-город новый НАЗВАНИЕ, чинить НАЗВАНИЕ, столица НАЗВАНИЕ
-поделиться НАЗВАНИЕ @игрок, разведка @игрок, топ, мойid
-дать @игрок РЕСУРС КОЛИЧЕСТВО (админ)""")
+    bot.reply_to(message, "📖 КОМАНДЫ: анкета, собрать, строить, поиск, склад, города, чертежи, эксп, помощь\nкрафт X НАЗВАНИЕ, разобрать X НАЗВАНИЕ, рецепт НАЗВАНИЕ\n!рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня\nдать @игрок ресурс кол-во (админ)")
 
 def cmd_craft(message):
     uid = message.from_user.id
@@ -474,7 +406,7 @@ def cmd_craft(message):
         c = db_conn.cursor()
         c.execute("SELECT * FROM vehicle_recipes WHERE vehicle_name=?", (name,))
         rec = c.fetchone()
-        if not rec: bot.reply_to(message, f"❌ Нет рецепта! !рецепт {name} | ..."); return
+        if not rec: bot.reply_to(message, f"❌ Нет рецепта!"); return
         p = get_player(uid)
         iron = rec[1]*qty; fuel = rec[2]*qty; gp = rec[3]*qty
         if p[6] < iron: bot.reply_to(message, f"❌ Нужно {iron:.0f}🔩"); return
@@ -487,7 +419,7 @@ def cmd_craft(message):
         else: c.execute("INSERT INTO vehicles (user_id, vehicle_name, quantity) VALUES (?,?,?)", (uid,name,qty))
         db_conn.commit()
         bot.reply_to(message, f"✅ {qty}x {name}")
-    except: bot.reply_to(message, "❌ крафт КОЛИЧЕСТВО НАЗВАНИЕ")
+    except: bot.reply_to(message, "❌ крафт X НАЗВАНИЕ")
 
 def cmd_dismantle(message):
     uid = message.from_user.id
@@ -508,7 +440,7 @@ def cmd_dismantle(message):
         c.execute("UPDATE vehicles SET quantity=quantity-? WHERE user_id=? AND vehicle_name=?", (qty,uid,name))
         db_conn.commit()
         bot.reply_to(message, f"♻ {qty}x {name}")
-    except: bot.reply_to(message, "❌ разобрать КОЛИЧЕСТВО НАЗВАНИЕ")
+    except: bot.reply_to(message, "❌ разобрать X НАЗВАНИЕ")
 
 def cmd_recipe(message):
     try:
@@ -517,8 +449,7 @@ def cmd_recipe(message):
         c.execute("SELECT * FROM vehicle_recipes WHERE vehicle_name=?", (name,))
         rec = c.fetchone()
         if not rec: bot.reply_to(message, "❌ Не найден!"); return
-        text = f"📋 {name}:\n🔩 {rec[1]:.1f}\n⛽ {rec[2]:.1f}\n💥 {rec[3]:.1f}"
-        bot.reply_to(message, text)
+        bot.reply_to(message, f"📋 {name}:\n🔩 {rec[1]:.1f}\n⛽ {rec[2]:.1f}\n💥 {rec[3]:.1f}")
     except: bot.reply_to(message, "рецепт НАЗВАНИЕ")
 
 def cmd_create_recipe(message):
@@ -530,11 +461,11 @@ def cmd_create_recipe(message):
         super_heavy = parts[6].lower()=='да' if len(parts)>6 else False
         coal_pow = parts[7].lower()=='да' if len(parts)>7 else False
         iron = weight * 2
-        if gp_grams >= 500: gp = gp_grams / 500
-        elif gp_grams >= 100: gp = gp_grams / 100
-        else: gp = gp_grams / 50
-        fuel = 0 if coal_pow else power / 50
-        coal = power / 50 if coal_pow else 0
+        if gp_grams >= 500: gp = gp_grams/500
+        elif gp_grams >= 100: gp = gp_grams/100
+        else: gp = gp_grams/50
+        fuel = 0 if coal_pow else power/50
+        coal = power/50 if coal_pow else 0
         rubber = 1 if wheels else 0
         if super_heavy:
             if weight > 35000: d = 35
@@ -553,8 +484,7 @@ def cmd_create_recipe(message):
         c.execute("INSERT OR REPLACE INTO vehicle_recipes VALUES (?,?,?,?,?,?,?,?)",
                   (name,iron,fuel,gp,rubber,0,coal,0))
         db_conn.commit()
-        text = f"✅ Рецепт {name}:\n🔩 {iron:.1f}\n⛽ {fuel:.1f}\n💥 {gp:.1f}"
-        bot.reply_to(message, text)
+        bot.reply_to(message, f"✅ Рецепт {name}:\n🔩 {iron:.1f}\n⛽ {fuel:.1f}\n💥 {gp:.1f}")
     except: bot.reply_to(message, "❌ !рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня")
 
 def cmd_fort(message):
@@ -568,23 +498,19 @@ def cmd_fort(message):
         if p[11] < cem: bot.reply_to(message, f"❌ Нужно {cem}🏗"); return
         if p[14] < wood: bot.reply_to(message, f"❌ Нужно {wood}🪵"); return
         upd_res(message.from_user.id,'cement',-cem); upd_res(message.from_user.id,'wood',-wood)
-        names = {'дот':'ДОТ','бункер':'Бункер','каземат':'Каземат'}
-        bot.reply_to(message, f"✅ {names.get(ftype,ftype)} {armor} в {city}!")
+        bot.reply_to(message, f"✅ {ftype} {armor} в {city}!")
     except: bot.reply_to(message, "дот КЛАСС Город")
 
 def cmd_new_city(message):
     try:
-        for p in ['город новый ','построить город ']:
-            if message.text.startswith(p): name = message.text.replace(p,'',1); break
+        name = message.text.replace('город новый ','',1)
         uid = message.from_user.id
-        c = db_conn.cursor()
-        if c.execute("SELECT COUNT(*) FROM cities WHERE user_id=?", (uid,)).fetchone()[0] >= MAX_CITIES:
-            bot.reply_to(message, f"❌ Максимум {MAX_CITIES} городов!"); return
         p = get_player(uid)
         if p[14] < 850: bot.reply_to(message, "❌ 850🪵"); return
         if p[11] < 1000: bot.reply_to(message, "❌ 1000🏗"); return
         if p[5] < 350: bot.reply_to(message, "❌ 350💰"); return
         upd_res(uid,'wood',-850); upd_res(uid,'cement',-1000); upd_res(uid,'tenge',-350)
+        c = db_conn.cursor()
         c.execute("INSERT INTO cities (user_id, city_name) VALUES (?,?)", (uid,name))
         db_conn.commit()
         bot.reply_to(message, f"✅ Город {name}!")
@@ -592,8 +518,7 @@ def cmd_new_city(message):
 
 def cmd_repair_city(message):
     try:
-        for p in ['чинить ','город чинить ']:
-            if message.text.startswith(p): name = message.text.replace(p,'',1); break
+        name = message.text.replace('чинить ','',1)
         p = get_player(message.from_user.id)
         if p[14] < 500: bot.reply_to(message, "❌ 500🪵"); return
         if p[11] < 800: bot.reply_to(message, "❌ 800🏗"); return
@@ -755,10 +680,6 @@ def cmd_unwarn(message):
         bot.reply_to(message, f"✅ Варн снят!")
     except: bot.reply_to(message, "снятьварн @игрок")
 
-def cmd_rollback(message):
-    if not is_admin(message.from_user.id, 1): bot.reply_to(message, "❌ Нет прав!"); return
-    bot.reply_to(message, "♻ Откат в разработке")
-
 def cmd_admin_list(message):
     c = db_conn.cursor()
     c.execute("SELECT a.admin_level, p.username FROM admins a JOIN players p ON a.user_id=p.user_id")
@@ -771,26 +692,22 @@ def cmd_admin_list(message):
 def callback_handler(call):
     uid = call.from_user.id
     p = get_player(uid)
-    
-    # Проверка: только тот кто вызвал меню может нажимать кнопки
     if not p or not has_country(uid):
-        bot.answer_callback_query(call.id, "❌ Ай-яй-яй, у вас нет страны!")
+        bot.answer_callback_query(call.id, "❌ Ай-яй-яй, так нельзя!")
         return
-    
     data = call.data
     
     if data.startswith('b_'):
         bt = data[2:]
         if bt in BUILDING_COSTS:
             cost = BUILDING_COSTS[bt]
-            if p[5] < cost:
-                bot.answer_callback_query(call.id, f"❌ Нужно {cost}💰"); return
+            if p[5] < cost: bot.answer_callback_query(call.id, f"❌ {cost}💰"); return
             if bt in BUILDING_DEPOSIT and not has_deposit(uid, BUILDING_DEPOSIT[bt]):
                 bot.answer_callback_query(call.id, "❌ Сначала найдите месторождение!"); return
             if bt in BUILDING_POP and BUILDING_POP[bt] > 0:
                 free = p[3] - count_buildings_pop(uid)
                 if free < BUILDING_POP[bt]:
-                    bot.answer_callback_query(call.id, f"❌ Нужно {BUILDING_POP[bt]}👥 (свободно {free:.0f})"); return
+                    bot.answer_callback_query(call.id, f"❌ Нужно {BUILDING_POP[bt]}👥"); return
             upd_res(uid,'tenge',-cost)
             if bt in BUILDING_DEPOSIT: use_deposit(uid, BUILDING_DEPOSIT[bt])
             c = db_conn.cursor()
@@ -822,7 +739,6 @@ def callback_handler(call):
     elif data.startswith('e_'):
         reg = data[2:]
         rewards = {'europe':200,'asia':200,'africa':225,'america_north':200,'america_south':200,'australia':175}
-        names = {'europe':'Европа','asia':'Азия','africa':'Африка','america_north':'Сев.Америка','america_south':'Юж.Америка','australia':'Австралия'}
         if p[5] < 70: bot.answer_callback_query(call.id, "❌ 70💰"); return
         c = db_conn.cursor()
         c.execute("SELECT id FROM expeditions WHERE user_id=? AND status='active'", (uid,))
@@ -831,48 +747,8 @@ def callback_handler(call):
         end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
         c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)", (uid,reg,end,rewards[reg]))
         db_conn.commit()
-        bot.answer_callback_query(call.id, f"✅ {names[reg]}!")
-        bot.send_message(call.message.chat.id, f"🌍 {names[reg]} | +{rewards[reg]}👥 | 📅 {end}")
-
-import subprocess
-import os
-
-import urllib.request
-
-def keep_alive():
-    """Пинг самого себя каждые 14 минут чтобы не усыпали"""
-    while True:
-        time.sleep(840)
-        try:
-            service_url = os.environ.get('RENDER_EXTERNAL_URL', '')
-            if service_url:
-                urllib.request.urlopen(f"{service_url}/health", timeout=10)
-        except:
-            pass
-
-def save_db_to_github():
-    """Сохраняет базу данных в GitHub"""
-    try:
-        token = os.environ.get('GITHUB_TOKEN')
-        repo = os.environ.get('GITHUB_REPO')
-        if not token or not repo:
-            return
-        
-        subprocess.run(['git', 'config', '--global', 'user.email', 'bot@render.com'], capture_output=True)
-        subprocess.run(['git', 'config', '--global', 'user.name', 'Render Bot'], capture_output=True)
-        subprocess.run(['git', 'add', 'game.db'], capture_output=True, cwd='/opt/render/project/src')
-        subprocess.run(['git', 'commit', '-m', 'Auto-save database'], capture_output=True, cwd='/opt/render/project/src')
-        subprocess.run(['git', 'push', f'https://{token}@github.com/{repo}.git', 'HEAD:main'], capture_output=True, cwd='/opt/render/project/src')
-    except:
-        pass
-        
-        subprocess.run(['git', 'config', '--global', 'user.email', 'bot@render.com'], capture_output=True)
-        subprocess.run(['git', 'config', '--global', 'user.name', 'Render Bot'], capture_output=True)
-        subprocess.run(['git', 'add', 'game.db'], capture_output=True, cwd='/opt/render/project/src')
-        subprocess.run(['git', 'commit', '-m', 'Auto-save database'], capture_output=True, cwd='/opt/render/project/src')
-        subprocess.run(['git', 'push', f'https://{token}@github.com/{repo}.git', 'HEAD:main'], capture_output=True, cwd='/opt/render/project/src')
-    except:
-        pass
+        bot.answer_callback_query(call.id, f"✅ Экспедиция!")
+        bot.send_message(call.message.chat.id, f"🌍 Экспедиция отправлена! +{rewards[reg]}👥 через 3 дня")
 
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
@@ -881,19 +757,13 @@ if __name__ == '__main__':
         port = int(os.environ.get('PORT', 10000))
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
     
-    def auto_save():
-        while True:
-            time.sleep(300)
-            save_db_to_github()
-    
     threading.Thread(target=run_web, daemon=True).start()
-    threading.Thread(target=auto_save, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
+    threading.Thread(target=save_db_to_github, daemon=True).start()
     
     while True:
         try:
             bot.polling(none_stop=True)
         except Exception as e:
             print(f"Ошибка: {e}")
-            save_db_to_github()
             time.sleep(5)
