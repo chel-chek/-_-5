@@ -146,7 +146,6 @@ def use_deposit(uid, dt):
     db_conn.commit()
 
 def can_collect(uid):
-    """Проверка: прошло 24 часа с последнего сбора"""
     p = get_player(uid)
     if not p: return True
     last = p[15]
@@ -158,7 +157,6 @@ def can_collect(uid):
         return True
 
 def can_expedition(uid):
-    """Проверка: прошло 72 часа с последней экспедиции"""
     p = get_player(uid)
     if not p: return True
     last = p[16] if len(p) > 16 else None
@@ -323,6 +321,8 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
+# ==================== ВСЕ КОМАНДЫ ====================
+
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
@@ -336,7 +336,7 @@ def cmd_collect(message):
         return
     
     c = db_conn.cursor()
-    c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities c ON b.city_id=c.id WHERE b.user_id=? AND c.is_destroyed=0 GROUP BY b.building_type", (uid,))
+    c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities ct ON b.city_id=ct.id WHERE b.user_id=? AND ct.is_destroyed=0 GROUP BY b.building_type", (uid,))
     bld = dict(c.fetchall())
     
     if not bld:
@@ -357,8 +357,10 @@ def cmd_collect(message):
     for res, val in inc.items():
         upd_res(uid, res, val)
     
+    # Сохраняем время сбора - НОВЫЙ КУРСОР!
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
+    c2 = db_conn.cursor()
+    c2.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
     db_conn.commit()
     
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
@@ -380,8 +382,6 @@ def cmd_expedition(message):
            types.InlineKeyboardButton("🌎 Юж.Америка +200", callback_data="e_america_south"),
            types.InlineKeyboardButton("🦘 Австралия +175", callback_data="e_australia"))
     bot.reply_to(message, "🌍 Куда? (70💰, раз в 3 дня)", reply_markup=mk)
-
-# Остальные команды (build_menu, search_menu, warehouse, cities, blueprints, help, craft, dismantle, recipe, create_recipe, fort, new_city, repair_city, move_capital, share_bp, look, top, give, take, give_all, ban, unban, mute, unmute, warn, unwarn, admin_list, callback_handler)
 
 def cmd_build_menu(message):
     mk = types.InlineKeyboardMarkup(row_width=2)
@@ -794,9 +794,11 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "❌ Нужно 70💰"); return
         upd_res(uid,'tenge',-70)
         today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c = db_conn.cursor()
-        c.execute("UPDATE players SET last_expedition=? WHERE user_id=?", (today, uid))
+        c2 = db_conn.cursor()
+        c2.execute("UPDATE players SET last_expedition=? WHERE user_id=?", (today, uid))
+        db_conn.commit()
         end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        c = db_conn.cursor()
         c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)",
                   (uid, reg, end, rewards[reg]))
         db_conn.commit()
