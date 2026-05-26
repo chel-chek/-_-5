@@ -837,6 +837,19 @@ def callback_handler(call):
 import subprocess
 import os
 
+import urllib.request
+
+def keep_alive():
+    """Пинг самого себя каждые 14 минут чтобы не усыпали"""
+    while True:
+        time.sleep(840)
+        try:
+            service_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+            if service_url:
+                urllib.request.urlopen(f"{service_url}/health", timeout=10)
+        except:
+            pass
+
 def save_db_to_github():
     """Сохраняет базу данных в GitHub"""
     try:
@@ -852,16 +865,22 @@ def save_db_to_github():
         subprocess.run(['git', 'push', f'https://{token}@github.com/{repo}.git', 'HEAD:main'], capture_output=True, cwd='/opt/render/project/src')
     except:
         pass
+        
+        subprocess.run(['git', 'config', '--global', 'user.email', 'bot@render.com'], capture_output=True)
+        subprocess.run(['git', 'config', '--global', 'user.name', 'Render Bot'], capture_output=True)
+        subprocess.run(['git', 'add', 'game.db'], capture_output=True, cwd='/opt/render/project/src')
+        subprocess.run(['git', 'commit', '-m', 'Auto-save database'], capture_output=True, cwd='/opt/render/project/src')
+        subprocess.run(['git', 'push', f'https://{token}@github.com/{repo}.git', 'HEAD:main'], capture_output=True, cwd='/opt/render/project/src')
+    except:
+        pass
 
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
     
-    # Веб-сервер для Render
     def run_web():
         port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
     
-    # Авто-сохранение
     def auto_save():
         while True:
             time.sleep(300)
@@ -869,6 +888,7 @@ if __name__ == '__main__':
     
     threading.Thread(target=run_web, daemon=True).start()
     threading.Thread(target=auto_save, daemon=True).start()
+    threading.Thread(target=keep_alive, daemon=True).start()
     
     while True:
         try:
