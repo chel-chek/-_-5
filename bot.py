@@ -163,22 +163,39 @@ def can_collect(uid):
     p = get_player(uid)
     if not p: return True
     last = p[15]
-    if not last: return True
+    if not last or str(last).strip() == '' or str(last) == 'None':
+        return True
     try:
-        last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - last_dt).total_seconds() >= 86400
-    except:
+        last_str = str(last).strip()
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"]:
+            try:
+                last_dt = datetime.strptime(last_str[:19], fmt)
+                passed = (datetime.now() - last_dt).total_seconds()
+                return passed >= 86400
+            except:
+                continue
+        return True
+    except Exception as e:
+        print(f"ERROR can_collect: {e}")
         return True
 
 def can_expedition(uid):
     """Проверяет можно ли отправить экспедицию (раз в 72 часа)"""
     p = get_player(uid)
     if not p: return True
-    last = p[16] if len(p) > 16 and p[16] else None
-    if not last: return True
+    last = p[16] if len(p) > 16 else None
+    if not last or str(last).strip() == '' or str(last) == 'None':
+        return True
     try:
-        last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - last_dt).total_seconds() >= 259200
+        last_str = str(last).strip()
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"]:
+            try:
+                last_dt = datetime.strptime(last_str[:19], fmt)
+                passed = (datetime.now() - last_dt).total_seconds()
+                return passed >= 259200
+            except:
+                continue
+        return True
     except:
         return True
 
