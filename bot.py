@@ -64,9 +64,10 @@ def init_db():
                   rubber REAL DEFAULT 0, fabric REAL DEFAULT 0, coal REAL DEFAULT 0,
                   cement REAL DEFAULT 0, uranium REAL DEFAULT 0, wood REAL DEFAULT 0,
                   horses REAL DEFAULT 0, special_material REAL DEFAULT 0,
-                  last_collection TEXT, game_year REAL DEFAULT 1904)''')
+                  last_collection TEXT, last_expedition TEXT, game_year REAL DEFAULT 1904)''')
     for col, t in [('created_date','TEXT'),('is_banned','INTEGER DEFAULT 0'),
-                   ('is_muted','INTEGER DEFAULT 0'),('warns','INTEGER DEFAULT 0')]:
+                   ('is_muted','INTEGER DEFAULT 0'),('warns','INTEGER DEFAULT 0'),
+                   ('last_expedition','TEXT')]:
         try: c.execute(f"ALTER TABLE players ADD COLUMN {col} {t}")
         except: pass
     c.execute('''CREATE TABLE IF NOT EXISTS cities
@@ -144,6 +145,36 @@ def use_deposit(uid, dt):
     c = db_conn.cursor()
     c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,dt))
     db_conn.commit()
+
+def can_collect(uid):
+    """Проверяет можно ли собирать доход (раз в 24 часа)"""
+    p = get_player(uid)
+    if not p or not p[15]: return True
+    try:
+        last = datetime.strptime(p[15], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last).total_seconds() >= 86400
+    except:
+        try:
+            last = datetime.strptime(p[15], "%Y-%m-%d")
+            return (datetime.now() - last).total_seconds() >= 86400
+        except:
+            return True
+
+def can_expedition(uid):
+    """Проверяет можно ли отправить экспедицию (раз в 72 часа)"""
+    p = get_player(uid)
+    if not p: return True
+    last = p[16] if len(p) > 16 and p[16] else None
+    if not last: return True
+    try:
+        last_dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - last_dt).total_seconds() >= 259200
+    except:
+        try:
+            last_dt = datetime.strptime(last, "%Y-%m-%d")
+            return (datetime.now() - last_dt).total_seconds() >= 259200
+        except:
+            return True
 
 def save_db_to_github():
     try:
@@ -299,13 +330,32 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# Команды
+# ==================== КОМАНДЫ С ОГРАНИЧЕНИЯМИ ====================
+
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
-    today = datetime.now().strftime("%Y-%m-%d")
-    if p[15] == today: bot.reply_to(message, "❌ Уже собрано!"); return
-    if len(p)>18 and p[18] == today: bot.reply_to(message, "❌ Первый день!"); return
+    today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Проверка: прошло ли 24 часа с последнего сбора
+    if not can_collect(uid):
+        if p[15]:
+            try:
+                last = datetime.strptime(p[15], "%Y-%m-%d %H:%M:%S")
+                remaining = 86400 - (datetime.now() - last).total_seconds()
+                hours = int(remaining // 3600)
+                minutes = int((remaining % 3600) // 60)
+                bot.reply_to(message, f"❌ Доход уже собран! Следующий через {hours}ч {minutes}мин")
+            except:
+                bot.reply_to(message, "❌ Доход уже собран сегодня!")
+        else:
+            bot.reply_to(message, "❌ Доход уже собран сегодня!")
+        return
+    
+    if len(p)>18 and p[18] and p[18] == datetime.now().strftime("%Y-%m-%d"):
+        bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня.")
+        return
+    
     c = db_conn.cursor()
     c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities c ON b.city_id=c.id WHERE b.user_id=? AND c.is_destroyed=0 GROUP BY b.building_type", (uid,))
     bld = dict(c.fetchall())
@@ -322,9 +372,13 @@ def cmd_collect(message):
     days = 1
     if p[15]:
         try:
-            ld = datetime.strptime(p[15],"%Y-%m-%d")
+            ld = datetime.strptime(p[15],"%Y-%m-%d %H:%M:%S")
             days = max(1,(datetime.now()-ld).days)
-        except: pass
+        except:
+            try:
+                ld = datetime.strptime(p[15],"%Y-%m-%d")
+                days = max(1,(datetime.now()-ld).days)
+            except: pass
     for res, val in inc.items(): upd_res(uid, res, val*days)
     c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today,uid))
     db_conn.commit()
@@ -386,6 +440,20 @@ def cmd_blueprints(message):
     bot.reply_to(message, text)
 
 def cmd_expedition(message):
+    uid = message.from_user.id
+    if not can_expedition(uid):
+        p = get_player(uid)
+        if p and len(p)>16 and p[16]:
+            try:
+                last = datetime.strptime(p[16], "%Y-%m-%d %H:%M:%S")
+                remaining = 259200 - (datetime.now() - last).total_seconds()
+                hours = int(remaining // 3600)
+                bot.reply_to(message, f"❌ Экспедиция уже отправлена! Следующая через {hours}ч")
+            except:
+                bot.reply_to(message, "❌ Экспедиция недоступна! Ждите 3 дня.")
+        else:
+            bot.reply_to(message, "❌ Экспедиция недоступна! Ждите 3 дня.")
+        return
     mk = types.InlineKeyboardMarkup(row_width=1)
     mk.add(types.InlineKeyboardButton("🌍 Европа +200", callback_data="e_europe"),
            types.InlineKeyboardButton("🏯 Азия +200", callback_data="e_asia"),
@@ -393,7 +461,7 @@ def cmd_expedition(message):
            types.InlineKeyboardButton("🌎 Сев.Америка +200", callback_data="e_america_north"),
            types.InlineKeyboardButton("🌎 Юж.Америка +200", callback_data="e_america_south"),
            types.InlineKeyboardButton("🦘 Австралия +175", callback_data="e_australia"))
-    bot.reply_to(message, "🌍 Куда? (70💰, 3 дня)", reply_markup=mk)
+    bot.reply_to(message, "🌍 Куда? (70💰, раз в 3 дня)", reply_markup=mk)
 
 def cmd_help(message):
     bot.reply_to(message, "📖 КОМАНДЫ: анкета, собрать, строить, поиск, склад, города, чертежи, эксп, помощь\nкрафт X НАЗВАНИЕ, разобрать X НАЗВАНИЕ, рецепт НАЗВАНИЕ\n!рецепт НАЗВАНИЕ | vehicle | вес | лс | порох | колёса | сверхтяж | уголь | броня\nдать @игрок ресурс кол-во (админ)")
@@ -726,29 +794,45 @@ def callback_handler(call):
         dep = data[2:]
         costs = {'oil':20,'iron':20,'coal':20,'sulfur':15,'uranium':100}
         if dep in costs:
-            if p[5] < costs[dep]: bot.answer_callback_query(call.id, f"❌ {costs[dep]}💰"); return
+            if p[5] < costs[dep]:
+                bot.answer_callback_query(call.id, f"❌ Нужно {costs[dep]}💰"); return
             upd_res(uid,'tenge',-costs[dep])
-            ok = random.randint(1,5)==1 if dep=='uranium' else random.random()<0.5
+            # Поиск 50/50 (для урана 1/5)
+            if dep == 'uranium':
+                ok = random.randint(1, 5) == 1
+            else:
+                ok = random.random() < 0.5
             if ok:
                 c = db_conn.cursor()
                 c.execute("INSERT OR IGNORE INTO deposits (user_id, deposit_type) VALUES (?,?)", (uid,dep))
                 db_conn.commit()
                 bot.answer_callback_query(call.id, "✅ Найдено!")
-            else: bot.answer_callback_query(call.id, "❌ Пусто")
+                bot.send_message(call.message.chat.id, f"✅ Найдено месторождение!")
+            else:
+                bot.answer_callback_query(call.id, "❌ Пусто")
+                bot.send_message(call.message.chat.id, f"❌ Ничего не найдено, деньги потрачены.")
     
     elif data.startswith('e_'):
+        uid = call.from_user.id
+        if not can_expedition(uid):
+            bot.answer_callback_query(call.id, "❌ Экспедиция недоступна! Ждите 3 дня.")
+            return
         reg = data[2:]
         rewards = {'europe':200,'asia':200,'africa':225,'america_north':200,'america_south':200,'australia':175}
-        if p[5] < 70: bot.answer_callback_query(call.id, "❌ 70💰"); return
-        c = db_conn.cursor()
-        c.execute("SELECT id FROM expeditions WHERE user_id=? AND status='active'", (uid,))
-        if c.fetchone(): bot.answer_callback_query(call.id, "❌ Уже есть!"); return
+        names = {'europe':'Европа','asia':'Азия','africa':'Африка','america_north':'Сев.Америка','america_south':'Юж.Америка','australia':'Австралия'}
+        p = get_player(uid)
+        if p[5] < 70:
+            bot.answer_callback_query(call.id, "❌ Нужно 70💰"); return
         upd_res(uid,'tenge',-70)
+        today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c = db_conn.cursor()
+        c.execute("UPDATE players SET last_expedition=? WHERE user_id=?", (today,uid))
         end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
-        c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)", (uid,reg,end,rewards[reg]))
+        c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)",
+                  (uid,reg,end,rewards[reg]))
         db_conn.commit()
-        bot.answer_callback_query(call.id, f"✅ Экспедиция!")
-        bot.send_message(call.message.chat.id, f"🌍 Экспедиция отправлена! +{rewards[reg]}👥 через 3 дня")
+        bot.answer_callback_query(call.id, f"✅ {names.get(reg,reg)}!")
+        bot.send_message(call.message.chat.id, f"🌍 Экспедиция в {names.get(reg,reg)} отправлена! +{rewards[reg]}👥 через 3 дня.\nСледующая экспедиция через 72 часа.")
 
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
