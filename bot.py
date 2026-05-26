@@ -5,6 +5,14 @@ from datetime import datetime, timedelta
 import random
 import time
 import threading
+from flask import Flask
+import os
+
+app = Flask(__name__)
+
+@app.route('/health')
+def health():
+    return 'OK', 200
 
 TOKEN = '8786607133:AAGRlo79hTxWroCN-1vppbH9i0nCQrGS6OI'
 
@@ -848,11 +856,18 @@ def save_db_to_github():
 if __name__ == '__main__':
     print("🤖 Бот запущен!")
     
+    # Веб-сервер для Render
+    def run_web():
+        port = int(os.environ.get('PORT', 10000))
+        app.run(host='0.0.0.0', port=port)
+    
+    # Авто-сохранение
     def auto_save():
         while True:
             time.sleep(300)
             save_db_to_github()
     
+    threading.Thread(target=run_web, daemon=True).start()
     threading.Thread(target=auto_save, daemon=True).start()
     
     while True:
