@@ -16,7 +16,7 @@ app = Flask(__name__)
 def health():
     return 'OK', 200
 
-TOKEN = '8786607133:AAGRlo79hTxWroCN-1vppbH9i0nCQrGS6OI'
+TOKEN = '8786607133:AAEFAYuQ5k8jU5ELU4Fi-LiFVKVeAJSlx-o'
 
 bot = telebot.TeleBot(TOKEN)
 
