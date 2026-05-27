@@ -145,17 +145,6 @@ def use_deposit(uid, dt):
     c.execute("UPDATE deposits SET built=1 WHERE user_id=? AND deposit_type=? AND built=0 LIMIT 1", (uid,dt))
     db_conn.commit()
 
-def can_collect(uid):
-    p = get_player(uid)
-    if not p: return True
-    last = p[15]
-    if not last or str(last) in ['0', '0.0', 'None', 'NULL', '']: return True
-    try:
-        last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
-        return (datetime.now() - last_dt).total_seconds() >= 86400
-    except:
-        return True
-
 def can_expedition(uid):
     p = get_player(uid)
     if not p: return True
@@ -321,20 +310,33 @@ def handle_all(message):
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# ==================== ВСЕ КОМАНДЫ ====================
+# ==================== КОМАНДЫ ====================
 
 def cmd_collect(message):
     uid = message.from_user.id
     p = get_player(uid)
     
-    if not can_collect(uid):
-        bot.reply_to(message, "❌ Доход можно собирать раз в 24 часа!")
-        return
+    # Проверяем кулдаун: прошло ли 24 часа
+    last = p[15]
+    if last and str(last) not in ['0', '0.0', 'None', 'NULL', '']:
+        try:
+            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            passed = (datetime.now() - last_dt).total_seconds()
+            if passed < 86400:
+                remaining = 86400 - passed
+                hours = int(remaining // 3600)
+                minutes = int((remaining % 3600) // 60)
+                bot.reply_to(message, f"❌ Доход уже собран! Следующий через {hours}ч {minutes}мин")
+                return
+        except:
+            pass
     
+    # Первый день страны — нельзя
     if len(p) > 18 and p[18] and p[18] == datetime.now().strftime("%Y-%m-%d"):
         bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня.")
         return
     
+    # Считаем доход
     c = db_conn.cursor()
     c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities ct ON b.city_id=ct.id WHERE b.user_id=? AND ct.is_destroyed=0 GROUP BY b.building_type", (uid,))
     bld = dict(c.fetchall())
@@ -354,19 +356,33 @@ def cmd_collect(message):
     if 'fabric_factory' in bld: inc['fabric'] = 50*bld['fabric_factory']
     if 'stables' in bld: inc['horses'] = 20*bld['stables']
     
-    for res, val in inc.items():
-        upd_res(uid, res, val)
+    # Считаем сколько дней пропущено
+    days = 1
+    if last and str(last) not in ['0', '0.0', 'None', 'NULL', '']:
+        try:
+            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            days = max(1, (datetime.now() - last_dt).days)
+        except:
+            days = 1
     
-    # Сохраняем время сбора - НОВЫЙ КУРСОР!
+    # Начисляем с учётом пропущенных дней
+    for res, val in inc.items():
+        upd_res(uid, res, val * days)
+    
+    # Сохраняем время сбора - ПРЯМОЕ ПОДКЛЮЧЕНИЕ
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c2 = db_conn.cursor()
-    c2.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
-    db_conn.commit()
+    conn = sqlite3.connect('game.db')
+    conn.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
+    conn.commit()
+    conn.close()
     
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
-    text = "📊 Доход собран:\n"
+    if days > 1:
+        text = f"📊 Доход за {days} дн:\n"
+    else:
+        text = "📊 Доход собран:\n"
     for res, val in inc.items():
-        text += f"{nm.get(res,res)} +{val}\n"
+        text += f"{nm.get(res,res)} +{val * days}\n"
     bot.reply_to(message, text)
 
 def cmd_expedition(message):
@@ -794,9 +810,10 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "❌ Нужно 70💰"); return
         upd_res(uid,'tenge',-70)
         today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c2 = db_conn.cursor()
-        c2.execute("UPDATE players SET last_expedition=? WHERE user_id=?", (today, uid))
-        db_conn.commit()
+        conn = sqlite3.connect('game.db')
+        conn.execute("UPDATE players SET last_expedition=? WHERE user_id=?", (today, uid))
+        conn.commit()
+        conn.close()
         end = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
         c = db_conn.cursor()
         c.execute("INSERT INTO expeditions (user_id, region, end_date, reward_population) VALUES (?,?,?,?)",
