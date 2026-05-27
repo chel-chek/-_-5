@@ -318,9 +318,9 @@ def cmd_collect(message):
     
     # Проверяем кулдаун: прошло ли 24 часа
     last = p[15]
-    if last and str(last) not in ['0', '0.0', 'None', 'NULL', '']:
+    if last and str(last).strip() not in ['0', '0.0', 'None', 'NULL', '']:
         try:
-            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            last_dt = datetime.strptime(str(last).strip()[:19], "%Y-%m-%d %H:%M:%S")
             passed = (datetime.now() - last_dt).total_seconds()
             if passed < 86400:
                 remaining = 86400 - passed
@@ -331,18 +331,16 @@ def cmd_collect(message):
         except:
             pass
     
-    # Первый день страны — нельзя
     if len(p) > 18 and p[18] and p[18] == datetime.now().strftime("%Y-%m-%d"):
         bot.reply_to(message, "❌ Первый день страны! Доход со 2-го дня.")
         return
     
-    # Считаем доход
     c = db_conn.cursor()
     c.execute("SELECT b.building_type, SUM(b.quantity) FROM buildings b JOIN cities ct ON b.city_id=ct.id WHERE b.user_id=? AND ct.is_destroyed=0 GROUP BY b.building_type", (uid,))
     bld = dict(c.fetchall())
     
     if not bld:
-        bot.reply_to(message, "❌ Нет построек для дохода!")
+        bot.reply_to(message, "❌ Нет построек!")
         return
     
     inc = {}
@@ -356,31 +354,29 @@ def cmd_collect(message):
     if 'fabric_factory' in bld: inc['fabric'] = 50*bld['fabric_factory']
     if 'stables' in bld: inc['horses'] = 20*bld['stables']
     
-    # Считаем сколько дней пропущено
     days = 1
-    if last and str(last) not in ['0', '0.0', 'None', 'NULL', '']:
+    if last and str(last).strip() not in ['0', '0.0', 'None', 'NULL', '']:
         try:
-            last_dt = datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+            last_dt = datetime.strptime(str(last).strip()[:19], "%Y-%m-%d %H:%M:%S")
             days = max(1, (datetime.now() - last_dt).days)
         except:
             days = 1
     
-    # Начисляем с учётом пропущенных дней
     for res, val in inc.items():
         upd_res(uid, res, val * days)
     
-    # Сохраняем время сбора - ПРЯМОЕ ПОДКЛЮЧЕНИЕ
+    # Сохраняем через upd_res (точно работает)
     today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect('game.db')
-    conn.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
-    conn.commit()
-    conn.close()
+    c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
+    db_conn.commit()
+    
+    # Проверяем что сохранилось
+    c.execute("SELECT last_collection FROM players WHERE user_id=?", (uid,))
+    saved = c.fetchone()
+    print(f"SAVED: uid={uid}, time={saved[0] if saved else 'ERROR'}")
     
     nm = {'wood':'🪵','cement':'🏗','science_points':'🔬','tenge':'💰','iron':'🔩','fuel':'⛽','coal':'🪨','fabric':'🧵','horses':'🐴'}
-    if days > 1:
-        text = f"📊 Доход за {days} дн:\n"
-    else:
-        text = "📊 Доход собран:\n"
+    text = f"📊 Доход за {days} дн:\n" if days > 1 else "📊 Доход собран:\n"
     for res, val in inc.items():
         text += f"{nm.get(res,res)} +{val * days}\n"
     bot.reply_to(message, text)
