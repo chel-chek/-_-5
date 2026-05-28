@@ -6,6 +6,7 @@ import random
 import time
 import threading
 import os
+import subprocess
 from flask import Flask
 
 app = Flask(__name__)
@@ -153,7 +154,6 @@ def use_deposit(uid, dt):
     db_conn.commit()
 
 def can_collect_income(uid):
-    """Проверяет кулдаун 24 часа. Возвращает (можно_собирать, множитель, таймер)"""
     c = db_conn.cursor()
     c.execute("SELECT last_collection FROM players WHERE user_id=?", (uid,))
     row = c.fetchone()
@@ -183,7 +183,6 @@ def can_collect_income(uid):
         return True, 1, None
 
 def can_collect_expedition(uid):
-    """Проверка экспедиции без накопления"""
     p = get_player(uid)
     if not p: return True, None
     last = p[16]
@@ -217,6 +216,22 @@ def get_buildings_income(uid):
     if 'stables' in bld: income['horses'] += 20 * bld['stables']
     
     return income
+
+def save_db_to_github():
+    while True:
+        time.sleep(1800)
+        try:
+            token = os.environ.get('GITHUB_TOKEN','')
+            repo = os.environ.get('GITHUB_REPO','')
+            if not token or not repo:
+                continue
+            subprocess.run(['git','config','--global','user.email','bot@render.com'],capture_output=True)
+            subprocess.run(['git','config','--global','user.name','Render Bot'],capture_output=True)
+            subprocess.run(['git','add','game.db'],capture_output=True,cwd='/opt/render/project/src')
+            subprocess.run(['git','commit','-m','Auto-save database'],capture_output=True,cwd='/opt/render/project/src')
+            subprocess.run(['git','push',f'https://{token}@github.com/{repo}.git','HEAD:main'],capture_output=True,cwd='/opt/render/project/src')
+        except:
+            pass
 
 def show_anketa(uid, tid=None):
     if tid is None: tid = uid
@@ -373,7 +388,6 @@ def cmd_collect(message):
     c.execute("UPDATE players SET last_collection=? WHERE user_id=?", (today, uid))
     db_conn.commit()
     
-    # Проверка сохранения
     c.execute("SELECT last_collection FROM players WHERE user_id=?", (uid,))
     saved = c.fetchone()
     if not saved or saved[0] != today:
@@ -790,6 +804,7 @@ if __name__ == '__main__':
         app.run(host='0.0.0.0', port=port)
     
     threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=save_db_to_github, daemon=True).start()
     
     while True:
         try:
